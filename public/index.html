@@ -144,6 +144,11 @@
   .card.nan .value{color:var(--wwg-critical-rust);font-size:24px}
   .card.wind{flex-direction:row;gap:10px;align-items:center}
   .card.wind .windtxt{display:flex;flex-direction:column;flex:1;height:100%}
+  .card.precip{grid-column:span 2}
+  .precip-rows{display:flex;justify-content:space-between;gap:4px;margin-top:8px}
+  .precip-rows .pr{text-align:center;flex:1}
+  .precip-rows .pr .pv{font-family:var(--wwg-font-headline);font-size:19px;font-weight:600;color:var(--wwg-deep-blue)}
+  .precip-rows .pr .pl{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--wwg-graphite);margin-top:2px}
   #compass{flex:0 0 78px}
 
   /* ---------- charts ---------- */
@@ -737,6 +742,16 @@ const UI = {
     }
     if (Store.roles.solar !== undefined) mk("solar", ROLE_LABELS.solar);
     if (Store.roles.rain  !== undefined) mk("rain", "Rain (24 h)");
+    if (Store.roles.rain !== undefined){
+      const pc = document.createElement("div");
+      pc.className = "card precip"; pc.id = "card-precip";
+      pc.innerHTML = '<div class="label">Precipitation Totals</div>' +
+        '<div class="precip-rows">' +
+        ["Today","Yesterday","7 Days","Month","Year"].map(l =>
+          '<div class="pr"><div class="pv">--</div><div class="pl">'+l+'</div></div>').join("") +
+        '</div><div class="detail" id="precip-asof"></div>';
+      c.appendChild(pc);
+    }
     if (Store.roles.battV !== undefined) mk("battV", ROLE_LABELS.battV);
   },
 
@@ -987,6 +1002,21 @@ el("btn-pause").onclick = function(){
 };
 el("btn-csv").onclick = downloadCSV;
 
+async function loadPrecipSummary(){
+  if (!el("card-precip")) return;
+  try{
+    const r = await DataSource.fetchJson(CONFIG.apiBase + "/precip?station=" +
+      encodeURIComponent(CONFIG.station));
+    const vals = [r.today, r.yesterday, r.week, r.month, r.ytd];
+    el("card-precip").querySelectorAll(".pv").forEach((v, i) => {
+      v.textContent = (vals[i] === null || vals[i] === undefined)
+        ? "--" : vals[i].toFixed(2) + (r.units ? " " + r.units : "");
+    });
+    el("precip-asof").textContent = r.asOf ? "as of " + r.asOf.replace("T", " ") : "";
+  } catch(e){ /* keep placeholders */ }
+}
+setInterval(loadPrecipSummary, 300000);
+  
 UI.buildRangeButtons();
 initialLoad();
 </script>
