@@ -83,7 +83,8 @@ export function buildQuery(station, { last, hours, sinceRec }) {
     utc: false,
     recordsPerStation: MAX_RECORDS_PER_QUERY,
   };
-  if (station.fields && station.fields.length) body.fields = [...station.fields];
+  if (station.fields && station.fields.length)
+    body.fields = station.fields.map((f) => (typeof f === "string" ? f : f.key));
 
   if (last != null) {
     body.recordsPerStation = Math.min(last, MAX_RECORDS_PER_QUERY);
