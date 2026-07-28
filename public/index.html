@@ -1020,7 +1020,10 @@ async function loadPrecipSummary(){
       v.textContent = (vals[i] === null || vals[i] === undefined)
         ? "--" : vals[i].toFixed(2) + (r.units ? " " + r.units : "");
     });
-    el("precip-asof").textContent = r.asOf ? "as of " + r.asOf.replace("T", " ") : "";
+    el("precip-asof").textContent =
+      (r.backfillRemaining > 0 ? "building history \u2014 " + r.backfillRemaining + " days left \u00B7 " : "") +
+      (r.asOf ? "as of " + r.asOf.replace("T", " ") : "");
+    if (r.backfillRemaining > 0) setTimeout(loadPrecipSummary, 20000);
   } catch(e){ /* keep placeholders */ }
 }
 setInterval(loadPrecipSummary, 300000);
