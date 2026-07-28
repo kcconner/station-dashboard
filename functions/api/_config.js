@@ -29,7 +29,7 @@ export const STATIONS = [
     { key: "WindMax",    convert: "ms2mph" },
     { key: "WindDir" },
     { key: "SolarRad",   units: "W/m\u00B2" },
-    { key: "Precip" },
+    { key: "Precip", convert: "mm2in" },
     { key: "BatVoltMin", units: "V" },
   ],
 },
