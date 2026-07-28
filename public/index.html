@@ -661,15 +661,15 @@ const UI = {
           {role:"wsAvg", color:"#00669A", kind:"line", axis:"L"}
         ],
         legend:[["Avg","#00669A"],["Max","#8CCEF0"]] },
-      { title:"Solar Radiation", show:["solar"],
-        series:[{role:"solar", color:"#127EB7", kind:"line", axis:"L", fill:true}],
-        legend:[] },
-      { title:"Rain / Battery", show:["rain","battV"],
+      { title:"Solar Radiation / Battery", show:["solar","battV"],
         series:[
-          {role:"rain",  color:"#2495D3", kind:"bar",  axis:"L"},
+          {role:"solar", color:"#127EB7", kind:"line", axis:"L", fill:true},
           {role:"battV", color:"#545454", kind:"line", axis:"R"}
         ],
-        legend:[["Rain (interval)","#2495D3"],["Battery V","#545454"]] }
+        legend:[["Solar W/m\u00B2","#127EB7"],["Battery V","#545454"]] },
+      { title:"Rain", show:["rain"],
+        series:[{role:"rain", color:"#2495D3", kind:"bar", axis:"L"}],
+        legend:[] }
     ];
     for (const d of defs){
       if (!d.show.some(role => Store.roles[role] !== undefined)) continue;
