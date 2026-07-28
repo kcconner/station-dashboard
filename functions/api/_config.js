@@ -16,14 +16,23 @@
  * the change.
  */
 export const STATIONS = [
-  {
-    id: "Broadway",
-    code: "WWG-1006",
-    public_name: "Broadway Weather",
-    interval: 10,
-    fields: ["Temp", "RH", "WindSpeed", "WindSpeedMax", "WindDir",
-             "Solar", "Precip", "Battery"],
-  },
+{
+  id: "Broadway",
+  code: "WWG-1006",
+  public_name: "Broadway Weather",
+  interval: 1,
+  fields: [
+    { key: "Temp",       units: "°C" },
+    { key: "RH" },
+    { key: "DewPoint",   units: "°C" },
+    { key: "WindSpeed",  units: "m/s" },
+    { key: "WindMax",    units: "m/s" },
+    { key: "WindDir" },
+    { key: "SolarRad",   units: "W/m²" },
+    { key: "Precip",     units: "mm" },
+    { key: "BatVoltMin", units: "V" },
+  ],
+},
 ];
 
 export function getStation(id) {
