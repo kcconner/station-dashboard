@@ -35,6 +35,12 @@ function base(env) {
   return (env.WWG_API_BASE || "https://api.westernwx.com").replace(/\/+$/, "");
 }
 
+const CONVERSIONS = {
+  c2f:    { fn: (v) => v * 9 / 5 + 32, units: "\u00B0F" },
+  ms2mph: { fn: (v) => v * 2.236936,   units: "mph" },
+  mm2in:  { fn: (v) => v / 25.4,       units: "in" },
+};
+
 async function upstream(env, method, path, body) {
   const resp = await fetch(base(env) + path, {
     method,
