@@ -942,6 +942,7 @@ async function initialLoad(){
     el("nl-poll").textContent = fmtClock(new Date());
     failures = 0;
     schedule();
+    loadPrecipSummary();
   } catch(e){
     failures++;
     UI.error("Initial load failed: " + e.message +
