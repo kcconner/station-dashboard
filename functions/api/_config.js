@@ -21,6 +21,7 @@ export const STATIONS = [
   code: "WWG-1006",
   public_name: "Broadway Weather",
   interval: 1,
+  summaryInterval: 1440,
   fields: [
     { key: "Temp",       convert: "c2f" },
     { key: "RH" },
