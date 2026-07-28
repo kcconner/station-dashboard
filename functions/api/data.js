@@ -46,7 +46,7 @@ export async function onRequestGet(context) {
     resp = jsonResponse(payload, 200, ttl);
   } catch (e) {
     console.error(`WWG API query failed for station=${station.id}: ${e.message}`);
-    return errorResponse("data source unavailable", 502);
+    return errorResponse("data source unavailable: " + e.message, 502);
   }
 
   if (cache) context.waitUntil(cache.put(cacheKey, resp.clone()));
