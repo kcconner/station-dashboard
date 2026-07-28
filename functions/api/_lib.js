@@ -131,11 +131,15 @@ const fieldDefs = (station.fields && station.fields.length
     const epochMs = Date.parse(rec.date);
     if (!rec.date || Number.isNaN(epochMs)) continue;
     const rvals = rec.values || {};
-    const vals = fields.map((f) => {
-      const v = rvals[f];
+    const vals = fieldDefs.map((d) => {
+      const v = rvals[d.key];
       if (v === null || v === undefined) return "NAN";
-      if (typeof v === "number") return Number.isNaN(v) ? "NAN" : v;
-      return String(v); // time/text-typed fields pass through
+      if (typeof v === "number") {
+        if (Number.isNaN(v)) return "NAN";
+        const c = d.convert && CONVERSIONS[d.convert];
+        return c ? Math.round(c.fn(v) * 100) / 100 : v;
+      }
+      return String(v);
     });
     data.push({
       time: rec.date.slice(0, 19),                        // station-local wall time
@@ -152,9 +156,9 @@ const fieldDefs = (station.fields && station.fields.length
       },
       fields: fieldDefs.map((d) => ({
         name: d.key,
-        units: d.units !== undefined
-          ? d.units
-          : (meta[d.key] && meta[d.key].units) || "",
+        units: d.units !== undefined ? d.units
+             : (d.convert && CONVERSIONS[d.convert]) ? CONVERSIONS[d.convert].units
+             : (meta[d.key] && meta[d.key].units) || "",
       })),
     },
     data,
