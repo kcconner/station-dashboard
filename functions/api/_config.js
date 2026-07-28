@@ -17,7 +17,7 @@
  */
 export const STATIONS = [
   {
-    id: "Broadway Weather",
+    id: "Broadway",
     code: "WWG-1006",
     public_name: "Broadway Weather",
     interval: 10,
