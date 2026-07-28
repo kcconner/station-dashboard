@@ -112,9 +112,10 @@ export async function queryData(station, selectors, env) {
   if (!Array.isArray(records)) records = [];
 
   const intervalSec = station.interval * 60;
-  const fields = (station.fields && station.fields.length)
-    ? station.fields
-    : discoverFields(records);
+const fieldDefs = (station.fields && station.fields.length
+    ? station.fields : discoverFields(records))
+    .map((f) => (typeof f === "string" ? { key: f } : f));
+  const fields = fieldDefs.map((d) => d.key);
   const meta = await fieldMetadata(env);
 
   // API returns newest -> oldest; the front end wants ascending
@@ -143,9 +144,11 @@ export async function queryData(station, selectors, env) {
         stationName: station.public_name,
         scan_sec: intervalSec,
       },
-      fields: fields.map((f) => ({
-        name: f,
-        units: (meta[f] && meta[f].units) || "",
+      fields: fieldDefs.map((d) => ({
+        name: d.key,
+        units: d.units !== undefined
+          ? d.units
+          : (meta[d.key] && meta[d.key].units) || "",
       })),
     },
     data,
