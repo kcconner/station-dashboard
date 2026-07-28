@@ -24,13 +24,6 @@ export const STATIONS = [
     fields: ["Temp", "RH", "WindSpeed", "WindSpeedMax", "WindDir",
              "Solar", "Precip", "Battery"],
   },
-  {
-    id: "demo2",
-    code: "DEF",
-    public_name: "High Desert Plateau",
-    interval: 10,
-    fields: ["Temp", "RH", "WindSpeed", "WindDir", "Battery"],
-  },
 ];
 
 export function getStation(id) {
