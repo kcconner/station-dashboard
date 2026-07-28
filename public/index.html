@@ -1,1 +1,994 @@
 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WWG Station Dashboard</title>
+<!--
+  ============================================================================
+  WWG Station Dashboard — cloud edition (Azure Static Web Apps front end)
+  ----------------------------------------------------------------------------
+  Static, dependency-free front end. All data comes from the WWG data API
+  (Azure Functions, /api/*), which reads the WWG database. This file never
+  talks to a datalogger and contains no credentials.
+
+  API contract (mirrors the CR1000X dataquery JSON shape):
+    GET /api/stations
+        -> [ {"id":"demo1","name":"Eastern Sierra Ridge"}, ... ]
+    GET /api/data?station=<id>&last=N | &hours=H | &since_rec=R
+        -> { "head": { "environment": {"stationName":..., "scan_sec":600},
+                       "fields":[{"name":"AirTemp_Avg","units":"Deg F"},...]},
+             "data": [ {"time":"2026-07-28T10:00:00","no":123,"vals":[...]},
+                       ... ] }
+    Missing values arrive as the string "NAN" (same convention as the logger).
+
+  URL parameter overrides (all optional):
+     ?station=demo1           station id (default: first from /api/stations)
+     ?api=/api                API root override
+     ?refresh=60              poll period, seconds
+     ?days=7                  history window to backfill/retain
+
+  NOTE (public site): station display names come from the API config. Per WWG
+  policy, do not put customer names in public-facing station names without
+  marketing approval.
+  ============================================================================
+-->
+<style>
+  :root{
+    /* WWG brand — Primary + Utilities palette + shared grays */
+    --wwg-horizon-blue:#127EB7;
+    --wwg-graphite:#545454;
+    --wwg-deep-blue:#00669A;
+    --wwg-bright-blue:#2495D3;
+    --wwg-sky-blue:#8CCEF0;
+    --wwg-baseline-teal:#238F95;
+    --wwg-elevated-amber:#C8993F;
+    --wwg-critical-rust:#B5492A;
+    --wwg-gray-300:#C6C6C6;
+    --wwg-gray-200:#D0CFCD;
+    --wwg-gray-100:#E0E0E0;
+
+    --page-bg:#F3F4F5;
+    --card-bg:#FFFFFF;
+    --ink:#3A3A3A;
+
+    --wwg-font-headline:"DM Sans",Arial,sans-serif;
+    --wwg-font-body:Roboto,Arial,sans-serif;
+    --wwg-font-mono:"Roboto Mono",Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:var(--wwg-font-body);
+    font-size:15px;line-height:1.4;color:var(--ink);
+    background:var(--page-bg);
+  }
+
+  /* ---------- header ---------- */
+  header{
+    background:var(--wwg-deep-blue);
+    color:#fff;
+    padding:14px 22px;
+    display:flex;align-items:center;gap:18px;flex-wrap:wrap;
+  }
+  header img.logo{height:34px;display:block}
+  .head-title{display:flex;flex-direction:column;min-width:0}
+  .head-title h1{
+    font-family:var(--wwg-font-headline);
+    font-weight:600;font-size:21px;line-height:1.2;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .head-title .sub{font-size:12.5px;opacity:.75;letter-spacing:.03em}
+  .head-spacer{flex:1}
+  .status-pill{
+    display:flex;align-items:center;gap:8px;
+    background:rgba(255,255,255,.12);
+    border:1px solid rgba(255,255,255,.25);
+    border-radius:999px;padding:6px 14px;
+    font-size:13px;font-weight:500;letter-spacing:.04em;
+  }
+  .status-dot{width:9px;height:9px;border-radius:50%;background:var(--wwg-gray-300)}
+  .status-pill.live  .status-dot{background:#39D98A;box-shadow:0 0 6px #39D98A;animation:pulse 2s infinite}
+  .status-pill.stale .status-dot{background:var(--wwg-elevated-amber)}
+  .status-pill.off   .status-dot{background:var(--wwg-critical-rust)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+  #station-sel{
+    font-family:var(--wwg-font-body);font-size:13px;
+    background:rgba(255,255,255,.12);color:#fff;
+    border:1px solid rgba(255,255,255,.3);border-radius:5px;
+    padding:6px 10px;max-width:230px;
+  }
+  #station-sel option{color:var(--ink)}
+  @media (prefers-reduced-motion:reduce){.status-pill.live .status-dot{animation:none}}
+
+  main{max-width:1180px;margin:0 auto;padding:20px 18px 40px}
+
+  /* ---------- section headings ---------- */
+  .sec-head{
+    display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;
+    margin:26px 0 12px;
+  }
+  .sec-head h2{
+    font-family:var(--wwg-font-headline);
+    font-size:17px;font-weight:600;color:var(--wwg-graphite);
+    text-transform:uppercase;letter-spacing:.09em;
+  }
+  .sec-head .rule{flex:1;height:1px;background:var(--wwg-gray-200)}
+
+  /* ---------- current conditions cards ---------- */
+  .cards{
+    display:grid;gap:12px;
+    grid-template-columns:repeat(auto-fit,minmax(168px,1fr));
+  }
+  .card{
+    background:var(--card-bg);
+    border:1px solid var(--wwg-gray-100);
+    border-top:3px solid var(--wwg-horizon-blue);
+    border-radius:6px;
+    padding:13px 15px 12px;
+    min-height:104px;
+    display:flex;flex-direction:column;
+  }
+  .card .label{
+    font-size:11.5px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--wwg-graphite);
+  }
+  .card .value{
+    font-family:var(--wwg-font-headline);
+    font-size:34px;font-weight:600;line-height:1.15;color:var(--wwg-deep-blue);
+    margin-top:6px;
+  }
+  .card .value .unit{font-size:15px;font-weight:500;color:var(--wwg-graphite);margin-left:3px}
+  .card .detail{font-size:12.5px;color:var(--wwg-graphite);margin-top:auto;padding-top:6px}
+  .card.nan .value{color:var(--wwg-critical-rust);font-size:24px}
+  .card.wind{flex-direction:row;gap:10px;align-items:center}
+  .card.wind .windtxt{display:flex;flex-direction:column;flex:1;height:100%}
+  #compass{flex:0 0 78px}
+
+  /* ---------- charts ---------- */
+  .range-btns{display:flex;gap:6px;flex-wrap:wrap}
+  .range-btns button, .toolbar button{
+    font-family:var(--wwg-font-body);
+    font-size:12.5px;font-weight:500;
+    padding:5px 13px;border-radius:4px;cursor:pointer;
+    border:1px solid var(--wwg-gray-200);
+    background:#fff;color:var(--wwg-graphite);
+  }
+  .range-btns button:hover{border-color:var(--wwg-horizon-blue);color:var(--wwg-horizon-blue)}
+  .range-btns button.active{
+    background:var(--wwg-horizon-blue);border-color:var(--wwg-horizon-blue);color:#fff;
+  }
+  .charts{display:grid;gap:14px;grid-template-columns:1fr 1fr}
+  @media (max-width:860px){.charts{grid-template-columns:1fr}}
+  .chart-panel{
+    background:var(--card-bg);
+    border:1px solid var(--wwg-gray-100);
+    border-radius:6px;padding:12px 14px 8px;
+  }
+  .chart-panel h3{
+    font-family:var(--wwg-font-headline);
+    font-size:14px;font-weight:600;color:var(--wwg-graphite);
+    display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;
+  }
+  .legend{display:inline-flex;gap:12px;font-family:var(--wwg-font-body);font-size:11.5px;font-weight:400}
+  .legend span{display:inline-flex;align-items:center;gap:5px}
+  .legend i{width:14px;height:3px;border-radius:2px;display:inline-block}
+  .chart-panel canvas{width:100%;height:210px;display:block;margin-top:6px}
+  .chart-panel.hidden{display:none}
+
+  /* ---------- data table ---------- */
+  .toolbar{display:flex;gap:8px;align-items:center}
+  .tbl-wrap{
+    background:var(--card-bg);
+    border:1px solid var(--wwg-gray-100);border-radius:6px;
+    overflow:auto;max-height:420px;
+  }
+  table{border-collapse:collapse;width:100%;font-size:13px;white-space:nowrap}
+  thead th{
+    position:sticky;top:0;
+    background:var(--wwg-graphite);color:#fff;
+    font-family:var(--wwg-font-headline);font-weight:500;font-size:12px;
+    letter-spacing:.04em;
+    padding:8px 12px;text-align:right;
+  }
+  thead th:first-child, tbody td:first-child{text-align:left}
+  thead th .u{display:block;font-weight:400;font-size:10.5px;opacity:.75}
+  tbody td{
+    padding:6px 12px;text-align:right;
+    border-bottom:1px solid var(--wwg-gray-100);
+    font-family:var(--wwg-font-mono);font-size:12.5px;
+  }
+  tbody tr:nth-child(even){background:#FAFBFB}
+  tbody td.nan{color:var(--wwg-critical-rust);font-weight:600}
+  tbody td.time{font-family:var(--wwg-font-body)}
+
+  /* ---------- footer / status line ---------- */
+  .netline{
+    margin-top:14px;font-size:12.5px;color:var(--wwg-graphite);
+    display:flex;gap:16px;flex-wrap:wrap;align-items:center;
+  }
+  .netline b{font-weight:500}
+  #err-banner{
+    display:none;margin:14px 0 0;padding:10px 14px;border-radius:6px;
+    background:#FBEFEA;border:1px solid var(--wwg-critical-rust);
+    color:var(--wwg-critical-rust);font-size:13.5px;
+  }
+  footer{
+    max-width:1180px;margin:0 auto;padding:0 18px 26px;
+    font-size:12px;color:var(--wwg-graphite);opacity:.8;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <img class="logo" alt="Western Weather Group" src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyBpZD0iTGF5ZXJfMSIgZGF0YS1uYW1lPSJMYXllciAxIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIiB2aWV3Qm94PSIwIDAgMTIwOS40IDI1MS4xIj4KICA8ZGVmcz4KICAgIDxzdHlsZT4KICAgICAgLmNscy0xIHsKICAgICAgICBmaWxsOiB1cmwoI2xpbmVhci1ncmFkaWVudC0zKTsKICAgICAgfQoKICAgICAgLmNscy0yIHsKICAgICAgICBmaWxsOiB1cmwoI2xpbmVhci1ncmFkaWVudC0yKTsKICAgICAgfQoKICAgICAgLmNscy0zIHsKICAgICAgICBmaWxsOiB1cmwoI2xpbmVhci1ncmFkaWVudCk7CiAgICAgIH0KCiAgICAgIC5jbHMtNCB7CiAgICAgICAgZmlsbDogI2ZmZjsKICAgICAgfQogICAgPC9zdHlsZT4KICAgIDxsaW5lYXJHcmFkaWVudCBpZD0ibGluZWFyLWdyYWRpZW50IiB4MT0iNTA2LjciIHkxPSIyNDI1LjM5IiB4Mj0iNTU2LjY0IiB5Mj0iMjQyNS4zOSIgZ3JhZGllbnRUcmFuc2Zvcm09InRyYW5zbGF0ZSgwIDI1MDIuNDQpIHNjYWxlKDEgLTEpIiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+CiAgICAgIDxzdG9wIG9mZnNldD0iLjEiIHN0b3AtY29sb3I9IiMyNDk1ZDMiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIuNyIgc3RvcC1jb2xvcj0iIzAwNjY5YSIvPgogICAgPC9saW5lYXJHcmFkaWVudD4KICAgIDxsaW5lYXJHcmFkaWVudCBpZD0ibGluZWFyLWdyYWRpZW50LTIiIHgxPSI1NDcuOSIgeTE9IjIzNzYuODkiIHgyPSI2MzIuMSIgeTI9IjIzNzYuODkiIHhsaW5rOmhyZWY9IiNsaW5lYXItZ3JhZGllbnQiLz4KICAgIDxsaW5lYXJHcmFkaWVudCBpZD0ibGluZWFyLWdyYWRpZW50LTMiIHgxPSI1OTcuMiIgeTE9IjIzNzYuODkiIHgyPSI2OTAuOCIgeTI9IjIzNzYuODkiIHhsaW5rOmhyZWY9IiNsaW5lYXItZ3JhZGllbnQiLz4KICA8L2RlZnM+CiAgPGc+CiAgICA8cGF0aCBjbGFzcz0iY2xzLTQiIGQ9Ik0xMDQzLjcsMjExLjZoMTEuNnYxMi43Yy0yLjUsMS01LjYsMS40LTkuMSwxLjQtNS42LDAtOS44LTEuNC0xMi42LTQuMi0yLjgtMi44LTQuMy03LjEtNC4zLTEyLjcsMC01LjIsMS41LTkuMyw0LjUtMTIuM3M3LjEtNC42LDEyLjMtNC42YzMuNiwwLDcuMS44LDEwLjUsMi40bDEuMS0yLjZjLTMuNC0xLjgtNy4yLTIuNy0xMS41LTIuNy00LDAtNy41LjgtMTAuNSwyLjUtMy4xLDEuNy01LjQsNC03LDctMS42LDMtMi40LDYuNS0yLjQsMTAuNCwwLDYuMywxLjYsMTEuMSw0LjksMTQuNiwzLjMsMy40LDgsNS4xLDE0LjIsNS4xLDQuNywwLDktLjcsMTIuOC0yLjN2LTE3LjRoLTE0LjR2Mi43aC0uMVoiLz4KICAgIDxwYXRoIGNsYXNzPSJjbHMtNCIgZD0iTTEwNzEuMSwxOTEuOWg2LjhjNC4yLDAsNy4zLjcsOS4xLDIsMS45LDEuMywyLjgsMy41LDIuOCw2LjRzLTEsNS0yLjksNi40Yy0xLjksMS41LTQuNiwyLjItOCwyLjJoLTcuOHYtMTdaTTEwODEuMiwyMTEuNmwxMC42LDE2LjloMy40bC0xMS4xLTE3LjdjMi45LS44LDUuMS0yLjEsNi42LTQsMS40LTEuOSwyLjItNC4xLDIuMi02LjgsMC0zLjctMS4yLTYuNC0zLjYtOC4zLTIuNC0xLjgtNi4yLTIuOC0xMS4yLTIuOGgtOS43djM5LjVoMi44di0xNi45aDEwdi4xWiIvPgogICAgPHBhdGggY2xhc3M9ImNscy00IiBkPSJNMTEwNi44LDE5Ni4zYzIuNi0yLjksNi4yLTQuNCwxMC45LTQuNHM4LjQsMS41LDEwLjksNC40LDMuOCw3LjEsMy44LDEyLjUtMS4zLDkuNy0zLjgsMTIuNmMtMi41LDIuOS02LjIsNC40LTEwLjksNC40cy04LjQtMS41LTEwLjktNC40Yy0yLjUtMy0zLjgtNy4xLTMuOC0xMi42czEuMy05LjYsMy44LTEyLjVaTTExMzAuOCwxOTQuM2MtMy4xLTMuNS03LjUtNS4zLTEzLTUuM3MtOS45LDEuOC0xMy4xLDUuM2MtMy4yLDMuNS00LjcsOC4zLTQuNywxNC40czEuNSwxMSw0LjcsMTQuNWMzLjEsMy41LDcuNSw1LjMsMTMsNS4zczkuOC0xLjgsMTMtNS4zYzMuMS0zLjUsNC43LTguNCw0LjctMTQuNS4xLTYtMS41LTEwLjgtNC42LTE0LjRaIi8+CiAgICA8cGF0aCBjbGFzcz0iY2xzLTQiIGQ9Ik0xMTcwLjcsMTg5djI1LjJjMCwzLjYtMS4xLDYuNC0zLjEsOC41LTIsMi01LDMtOC43LDNzLTYuOC0xLTguOS0zLjFjLTIuMS0yLTMuMS00LjktMy4xLTguN3YtMjQuOWgtMi44djI1LjFjMCw0LjUsMS4yLDguMSwzLjgsMTAuNiwyLjYsMi42LDYuMSwzLjgsMTAuNywzLjhzOC4zLTEuMiwxMC45LTMuOGMyLjYtMi41LDMuOS02LDMuOS0xMC41di0yNS4yaC0yLjdaIi8+CiAgICA8cGF0aCBjbGFzcz0iY2xzLTQiIGQ9Ik0xMTg3LjMsMTkxLjloNi45YzQuMSwwLDcuMi43LDkuMiwyLDIsMS40LDMsMy40LDMsNi4zLDAsMy4xLTEuMSw1LjMtMy4xLDYuNi0yLjEsMS40LTUuNSwyLTEwLjIsMmgtNS44di0xNi45Wk0xMTk0LjYsMTg5aC0xMC4xdjM5LjVoMi44di0xNi45aDYuNGM1LDAsOC45LTEsMTEuNi0zLDIuOC0yLDQuMS00LjgsNC4xLTguNS4xLTcuNC00LjktMTEuMS0xNC44LTExLjFaIi8+CiAgPC9nPgogIDxnPgogICAgPHBhdGggY2xhc3M9ImNscy0zIiBkPSJNNTE2LjcsMGMxMi44LDUxLjksMjYuNiwxMDIuNyw0MCwxNTQuMWgtMTBjLTEzLTUxLjctMjYuOC0xMDIuNS00MC0xNTQuMSwwLDAsMTAsMCwxMCwwWiIvPgogICAgPHBhdGggY2xhc3M9ImNscy0yIiBkPSJNNTY2LjYsMGMyMS44LDgzLjgsNDMuOSwxNjcuMiw2NS41LDI1MS4xaC0xOS4zYy0yMS04My45LTQ0LjctMTY4LjUtNjQuOS0yNTEuMSwwLDAsMTguNywwLDE4LjcsMFoiLz4KICAgIDxwYXRoIGNsYXNzPSJjbHMtMSIgZD0iTTYyNS4zLDBjMjEuNCw4NC4yLDQ0LDE2Ny4yLDY1LjUsMjUxLjFoLTI4LjdjLTIxLjQtODMuNi00NS4yLTE2OC02NC45LTI1MS4xLDAsMCwyOC4xLDAsMjguMSwwWiIvPgogIDwvZz4KICA8Zz4KICAgIDxwYXRoIGNsYXNzPSJjbHMtNCIgZD0iTTc5My4zLDEwNy4yaC0xNC44bC05LjEsMzguNWMtLjYsMi4zLTEuMiw1LjQtMiw5LjEtLjcsMy43LTEuMiw2LjktMS41LDkuMy0uNC0yLjYtLjktNS43LTEuNi05LjMtLjctMy42LTEuMy02LjMtMS43LTguMWwtMTAuNC0zOS42aC0xNC4ybC0xMC40LDM5LjZjLS42LDIuMS0xLjMsNS4xLTIsOC45LS43LDMuOS0xLjIsNi43LTEuMyw4LjUtLjctNS4yLTEuOS0xMS4zLTMuNS0xOC41bC05LjEtMzguNWgtMTQuOGwxOC4yLDcwLjZoMTdsOS43LTM3Yy40LTEuNiwxLTQuNCwxLjgtOC4yczEuMy02LjYsMS41LTguNGMuMSwxLjQuNiw0LjIsMS41LDguMy45LDQuMSwxLjUsNi44LDEuOSw4LjJsOS43LDM3LjFoMTcuMWwxOC03MC41WiIvPgogICAgPHBvbHlnb24gY2xhc3M9ImNscy00IiBwb2ludHM9Ijg0OSAxNjYuNSA4MjIuMiAxNjYuNSA4MjIuMiAxNDYuNyA4NDcuMyAxNDYuNyA4NDcuMyAxMzUuNCA4MjIuMiAxMzUuNCA4MjIuMiAxMTguNSA4NDkgMTE4LjUgODQ5IDEwNy4yIDgwNy4yIDEwNy4yIDgwNy4yIDE3Ny44IDg0OSAxNzcuOCA4NDkgMTY2LjUiLz4KICAgIDxwYXRoIGNsYXNzPSJjbHMtNCIgZD0iTTg4NC45LDE0OS41YzUtMTYuNyw4LTI3LjEsOS4xLTMxLjQuMywxLjIuNywyLjgsMS4zLDQuOS42LDIuMSwzLjIsMTAuOSw3LjksMjYuNWgtMTguM1pNOTI3LjksMTc3LjhsLTI0LjgtNzAuNmgtMTguNGwtMjQuOCw3MC42aDE2LjJsNS4xLTE2LjloMjUuNWw1LjEsMTYuOWgxNi4xWiIvPgogICAgPHBvbHlnb24gY2xhc3M9ImNscy00IiBwb2ludHM9Ijk2OC44IDExOC41IDk4OCAxMTguNSA5ODggMTA3LjIgOTM0LjYgMTA3LjIgOTM0LjYgMTE4LjUgOTUzLjggMTE4LjUgOTUzLjggMTc3LjggOTY4LjggMTc3LjggOTY4LjggMTE4LjUiLz4KICAgIDxwb2x5Z29uIGNsYXNzPSJjbHMtNCIgcG9pbnRzPSIxMDYyIDEwNy4yIDEwNDcuMSAxMDcuMiAxMDQ3LjEgMTM1LjQgMTAxOC40IDEzNS40IDEwMTguNCAxMDcuMiAxMDAzLjQgMTA3LjIgMTAwMy40IDE3Ny44IDEwMTguNCAxNzcuOCAxMDE4LjQgMTQ2LjcgMTA0Ny4xIDE0Ni43IDEwNDcuMSAxNzcuOCAxMDYyIDE3Ny44IDEwNjIgMTA3LjIiLz4KICAgIDxwb2x5Z29uIGNsYXNzPSJjbHMtNCIgcG9pbnRzPSIxMTI2LjcgMTY2LjUgMTA5OS44IDE2Ni41IDEwOTkuOCAxNDYuNyAxMTI0LjkgMTQ2LjcgMTEyNC45IDEzNS40IDEwOTkuOCAxMzUuNCAxMDk5LjggMTE4LjUgMTEyNi43IDExOC41IDExMjYuNyAxMDcuMiAxMDg0LjggMTA3LjIgMTA4NC44IDE3Ny44IDExMjYuNyAxNzcuOCAxMTI2LjcgMTY2LjUiLz4KICAgIDxwYXRoIGNsYXNzPSJjbHMtNCIgZD0iTTExNjkuMywxNDkuNWwxNi43LDI4LjJoMTYuNmMtMy4yLTQuOC0xMC4xLTE1LjQtMjAuNy0zMS44LDQuMi0xLjgsNy40LTQuMiw5LjctNy40LDIuMy0zLjEsMy40LTYuNywzLjQtMTAuOCwwLTYuOS0yLjMtMTIuMS02LjktMTUuNS00LjYtMy40LTExLjYtNS4xLTIxLjItNS4xaC0yMC41djcwLjZoMTV2LTI4LjJoNy45Wk0xMTYxLjQsMTE4LjVoNC41YzQuOCwwLDguMy44LDEwLjYsMi4yLDIuMywxLjUsMy40LDQsMy40LDcuNHMtMS4yLDYuMS0zLjQsNy43Yy0yLjIsMS42LTUuNywyLjQtMTAuNCwyLjRoLTQuOHYtMTkuN2guMVoiLz4KICA8L2c+CiAgPGc+CiAgICA8cGF0aCBjbGFzcz0iY2xzLTQiIGQ9Ik05Ni4zLDEwNy4yaC0xNC44bC05LjEsMzguNWMtLjYsMi4zLTEuMiw1LjQtMiw5LjEtLjcsMy43LTEuMiw2LjktMS41LDkuMy0uNC0yLjYtLjktNS43LTEuNi05LjNzLTEuMy02LjMtMS43LTguMWwtMTAuNC0zOS42aC0xNC4xbC0xMC40LDM5LjZjLS42LDIuMS0xLjMsNS4xLTIsOC45LS43LDMuOS0xLjIsNi43LTEuMyw4LjUtLjctNS4yLTEuOS0xMS4zLTMuNS0xOC41bC05LjEtMzguNUgwbDE4LjEsNzAuNmgxN2w5LjctMzdjLjQtMS42LDEtNC40LDEuOC04LjJzMS4zLTYuNiwxLjUtOC40Yy4xLDEuNC42LDQuMiwxLjUsOC4zczEuNSw2LjgsMS45LDguMmw5LjcsMzcuMWgxNy4xbDE4LTcwLjVaIi8+CiAgICA8cG9seWdvbiBjbGFzcz0iY2xzLTQiIHBvaW50cz0iMTUyLjEgMTY2LjUgMTI1LjIgMTY2LjUgMTI1LjIgMTQ2LjcgMTUwLjMgMTQ2LjcgMTUwLjMgMTM1LjQgMTI1LjIgMTM1LjQgMTI1LjIgMTE4LjUgMTUyLjEgMTE4LjUgMTUyLjEgMTA3LjIgMTEwLjIgMTA3LjIgMTEwLjIgMTc3LjggMTUyLjEgMTc3LjggMTUyLjEgMTY2LjUiLz4KICAgIDxwYXRoIGNsYXNzPSJjbHMtNCIgZD0iTTIwOS4zLDE0Ni41Yy0yLjQtMy4yLTYuOC02LjQtMTMuMy05LjYtNC45LTIuNC04LTQtOS4zLTQuOS0xLjMtLjktMi4zLTEuOS0yLjktMi45LS42LTEtLjktMi4yLS45LTMuNSwwLTIuMS43LTMuOSwyLjItNS4yLDEuNS0xLjMsMy42LTIsNi40LTIsMi4zLDAsNC43LjMsNy4xLjksMi40LjYsNS40LDEuNyw5LjEsMy4ybDQuOS0xMC45Yy0zLjYtMS40LTcuMS0yLjUtMTAuNC0zLjMtMy4zLS44LTYuNy0xLjItMTAuNC0xLjItNy40LDAtMTMuMiwxLjctMTcuNCw1LjEtNC4yLDMuMy02LjMsOC02LjMsMTMuOSwwLDMuMy42LDYuMywxLjksOC43LDEuMiwyLjUsMi45LDQuNyw1LDYuNSwyLjEsMS45LDUuMywzLjgsOS42LDUuOSw0LjUsMi4yLDcuNSwzLjgsOSw0LjhzMi42LDIuMSwzLjMsMy4xYy44LDEuMSwxLjIsMi4zLDEuMiwzLjcsMCwyLjUtLjksNC40LTIuNiw1LjYtMS43LDEuMy00LjIsMS45LTcuNCwxLjktMi43LDAtNS43LS40LTguOS0xLjMtMy4zLS45LTcuMi0yLjQtMTEuOS00LjV2MTMuMmM1LjcsMi42LDEyLjMsMy45LDE5LjcsMy45LDguMSwwLDE0LjQtMS43LDE4LjktNS4yczYuOC04LjIsNi44LTE0LjNjLjItNC41LTEtOC40LTMuNC0xMS42WiIvPgogICAgPHBvbHlnb24gY2xhc3M9ImNscy00IiBwb2ludHM9IjI1Ny42IDExOC41IDI3Ni45IDExOC41IDI3Ni45IDEwNy4yIDIyMy40IDEwNy4yIDIyMy40IDExOC41IDI0Mi42IDExOC41IDI0Mi42IDE3Ny44IDI1Ny42IDE3Ny44IDI1Ny42IDExOC41Ii8+CiAgICA8cG9seWdvbiBjbGFzcz0iY2xzLTQiIHBvaW50cz0iMzM0LjEgMTY2LjUgMzA3LjIgMTY2LjUgMzA3LjIgMTQ2LjcgMzMyLjMgMTQ2LjcgMzMyLjMgMTM1LjQgMzA3LjIgMTM1LjQgMzA3LjIgMTE4LjUgMzM0LjEgMTE4LjUgMzM0LjEgMTA3LjIgMjkyLjIgMTA3LjIgMjkyLjIgMTc3LjggMzM0LjEgMTc3LjggMzM0LjEgMTY2LjUiLz4KICAgIDxwYXRoIGNsYXNzPSJjbHMtNCIgZD0iTTM3Ni43LDE0OS41bDE2LjcsMjguMmgxNi42Yy0zLjItNC44LTEwLjEtMTUuNC0yMC43LTMxLjgsNC4yLTEuOCw3LjMtNC4yLDkuNy03LjQsMi4zLTMuMSwzLjQtNi43LDMuNC0xMC44LDAtNi45LTIuMy0xMi4xLTYuOS0xNS41LTQuNi0zLjQtMTEuNi01LjEtMjEuMi01LjFoLTIwLjV2NzAuNmgxNXYtMjguMmg3LjlaTTM2OC45LDExOC41aDQuNWM0LjgsMCw4LjMuOCwxMC42LDIuMiwyLjMsMS41LDMuNCw0LDMuNCw3LjRzLTEuMiw2LjEtMy40LDcuN2MtMi4yLDEuNi01LjcsMi40LTEwLjQsMi40aC00Ljh2LTE5LjdoLjFaIi8+CiAgICA8cGF0aCBjbGFzcz0iY2xzLTQiIGQ9Ik00ODUuNSwxMDcuMmgtMTMuNXYzMy40YzAsMy44LjIsMTAuMy44LDE5LjRoLS40bC0yOS43LTUyLjhoLTE4Ljd2NzAuNmgxMy40di0zMy4yYzAtNC0uMy0xMC43LS45LTIwLjFoLjRsMjkuNyw1My40aDE4Ljl2LTcwLjdoMFoiLz4KICA8L2c+Cjwvc3ZnPg==">
+  <div class="head-title">
+    <h1 id="station-name">Station Dashboard</h1>
+    <div class="sub" id="station-sub">connecting&hellip;</div>
+  </div>
+  <div class="head-spacer"></div>
+  <select id="station-sel" title="Choose station"></select>
+  <div class="status-pill off" id="status-pill">
+    <span class="status-dot"></span><span id="status-txt">CONNECTING</span>
+  </div>
+</header>
+
+<main>
+  <!-- ============ current conditions ============ -->
+  <div class="sec-head"><h2>Current Conditions</h2><div class="rule"></div>
+    <span id="obs-age" style="font-size:12.5px;color:var(--wwg-graphite)"></span>
+  </div>
+  <div class="cards" id="cards"></div>
+
+  <!-- ============ charts ============ -->
+  <div class="sec-head"><h2>History</h2><div class="rule"></div>
+    <div class="range-btns" id="range-btns"></div>
+  </div>
+  <div class="charts" id="charts"></div>
+
+  <!-- ============ data table ============ -->
+  <div class="sec-head"><h2>Data Table</h2><div class="rule"></div>
+    <div class="toolbar">
+      <button id="btn-pause">Pause updates</button>
+      <button id="btn-csv">Download CSV</button>
+    </div>
+  </div>
+  <div class="tbl-wrap"><table id="tbl"><thead></thead><tbody></tbody></table></div>
+
+  <div id="err-banner"></div>
+  <div class="netline">
+    <span><b>Source:</b> <span id="nl-src">&ndash;</span></span>
+    <span><b>Records buffered:</b> <span id="nl-buf">0</span></span>
+    <span><b>Last poll:</b> <span id="nl-poll">&ndash;</span></span>
+    <span><b>Next poll:</b> <span id="nl-next">&ndash;</span></span>
+  </div>
+</main>
+
+<footer>
+  Western Weather Group &middot; Data shown as reported by the station; timestamps
+  are station-local. URL parameters: ?station= &amp;refresh= &amp;days=
+</footer>
+
+<script>
+"use strict";
+/* ============================================================================
+   CONFIG — edit here, or override with URL params
+   ========================================================================= */
+const CONFIG = {
+  apiBase: "/api",       // WWG data API root (same origin on Static Web Apps)
+  station: "",           // station id; "" = first station from /api/stations
+  scanIntervalSec: 600,  // default; overridden by the API (head.environment.scan_sec)
+  refreshSec: 60,        // poll period
+  historyDays: 7,        // backfill window / buffer retention
+  stationName: "",       // "" = use logger's reported station name
+  requestTimeoutMs: 30000,
+  tableRows: 30,         // rows shown in the data table
+
+  /* Explicit field-role mapping. Leave a role "" to auto-detect by name.
+     Pin these per program family if auto-detect guesses wrong
+     (e.g. SDGE-family programs with alternate field names). */
+  fieldMap: {
+    airTemp: "",   // e.g. "AirTemp_Avg"
+    rh:      "",   // e.g. "RH"
+    wsAvg:   "",   // e.g. "WS_mph_Avg"
+    wsMax:   "",   // e.g. "WS_mph_Max"
+    windDir: "",   // e.g. "WindDir"
+    solar:   "",   // e.g. "SlrW_Avg"
+    rain:    "",   // e.g. "Rain_in_Tot"
+    battV:   ""    // e.g. "BattV_Min"
+  }
+};
+
+/* Auto-detect heuristics (first match wins, case-insensitive). */
+const ROLE_PATTERNS = {
+  airTemp: [/^temp(_avg)?$/i, /^airtemp/i, /^airtc/i, /^air_?t\b/i, /^at_?(avg)?$/i, /^temp_?air/i],
+  rh:      [/^rh(_|$)/i, /^relhum/i, /humidity/i],
+  wsAvg:   [/^wind_?speed(_avg)?$/i, /^ws.*avg/i, /^ws_?mph(_s)?(_wvt)?$/i, /^windspd.*avg/i, /^ws$/i],
+  wsMax:   [/^windmax$/i, /^wind_?speed.*max/i, /^ws.*max/i, /gust/i, /^windspd.*max/i],
+  battV:   [/^batvolt/i, /^batt/i, /^bv(_|$)/i],
+  windDir: [/^winddir/i, /^wd(_|$)/i, /^wind_?dir/i],
+  solar:   [/^slr/i, /solar/i, /^sw_?in/i, /pyran/i],
+  rain:    [/^precip$/i, /^rain/i, /^precip_/i, /^ppt/i],
+};
+
+const ROLE_LABELS = {
+  airTemp:"Air Temp", rh:"Relative Humidity", wsAvg:"Wind Speed",
+  wsMax:"Wind Gust", windDir:"Wind Direction", solar:"Solar",
+  rain:"Rain", battV:"Battery"
+};
+
+const RANGES = [
+  {label:"1H",  hours:1},
+  {label:"6H",  hours:6},
+  {label:"24H", hours:24},
+  {label:"3D",  hours:72},
+  {label:"7D",  hours:168}
+];
+
+/* ============================================================================
+   URL param overrides
+   ========================================================================= */
+(function applyParams(){
+  const q = new URLSearchParams(location.search);
+  if (q.get("api"))     CONFIG.apiBase = q.get("api").replace(/\/+$/,"");
+  if (q.get("station")) CONFIG.station = q.get("station");
+  if (q.get("refresh")) CONFIG.refreshSec = +q.get("refresh") || CONFIG.refreshSec;
+  if (q.get("station")) CONFIG.stationName = q.get("station");
+  if (q.get("days"))    CONFIG.historyDays = +q.get("days") || CONFIG.historyDays;
+})();
+
+/* ============================================================================
+   Utilities
+   ========================================================================= */
+function num(v){
+  // CR1000X JSON can emit "NAN" / "INF" / "-INF" as strings
+  if (typeof v === "number") return v;
+  if (typeof v === "string"){
+    const s = v.trim().toUpperCase();
+    if (s === "NAN") return NaN;
+    if (s === "INF" || s === "+INF") return Infinity;
+    if (s === "-INF") return -Infinity;
+    const n = parseFloat(v);
+    return isNaN(n) ? NaN : n;
+  }
+  return NaN;
+}
+function fmt(v, dp){
+  if (v === null || v === undefined || isNaN(v)) return "NAN";
+  if (!isFinite(v)) return v > 0 ? "INF" : "-INF";
+  if (dp === undefined) dp = (Math.abs(v) >= 100 ? 1 : 2);
+  return v.toFixed(dp);
+}
+function parseLoggerTime(s){
+  // "2026-07-28T10:00:00" (logger-local, no TZ) -> local Date
+  return new Date(s.replace(" ", "T"));
+}
+function fmtClock(d){
+  return d.toLocaleString([], {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"});
+}
+function degToCompass(d){
+  if (isNaN(d)) return "--";
+  const pts = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+  return pts[Math.round(((d % 360) + 360) % 360 / 22.5) % 16];
+}
+function el(id){ return document.getElementById(id); }
+
+/* ============================================================================
+   DataSource — WWG data API adapter (Azure Functions -> WWG database)
+   ========================================================================= */
+const DataSource = {
+  async fetchJson(u){
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), CONFIG.requestTimeoutMs);
+    try{
+      const r = await fetch(u, {signal: ctl.signal});
+      if (!r.ok) throw new Error("HTTP " + r.status + " " + r.statusText);
+      return await r.json();
+    } finally { clearTimeout(t); }
+  },
+  stations(){
+    return this.fetchJson(CONFIG.apiBase + "/stations");
+  },
+  url(qs){
+    return CONFIG.apiBase + "/data?station=" +
+           encodeURIComponent(CONFIG.station) + "&" + qs;
+  },
+  probe(){            // 1 record: fast first paint + field discovery
+    return this.fetchJson(this.url("last=1"));
+  },
+  backfill(nRecords){ // small n => quick "last N"; large n => full window
+    const qs = (nRecords && nRecords < 100)
+      ? "last=" + nRecords
+      : "hours=" + (CONFIG.historyDays * 24);
+    return this.fetchJson(this.url(qs));
+  },
+  incremental(afterRecNo){
+    return this.fetchJson(this.url("since_rec=" + afterRecNo));
+  }
+};
+
+/* ============================================================================
+   Store — record buffer + field metadata
+   ========================================================================= */
+const Store = {
+  fields: [],        // [{name, units, process, type}]
+  roles: {},         // role -> field index
+  rows: [],          // [{t: Date, no: int, vals: [Number]}] ascending by no
+  lastNo: null,
+  stationName: "",
+
+  setHead(head){
+    if (head && head.fields) this.fields = head.fields;
+    if (head && head.environment){
+      if (head.environment.stationName) this.stationName = head.environment.stationName;
+      if (head.environment.scan_sec) CONFIG.scanIntervalSec = +head.environment.scan_sec;
+    }
+    this.mapRoles();
+  },
+  mapRoles(){
+    this.roles = {};
+    const names = this.fields.map(f => f.name || "");
+    for (const role of Object.keys(ROLE_PATTERNS)){
+      const pinned = CONFIG.fieldMap[role];
+      if (pinned){
+        const i = names.findIndex(n => n.toLowerCase() === pinned.toLowerCase());
+        if (i >= 0){ this.roles[role] = i; continue; }
+      }
+      for (const re of ROLE_PATTERNS[role]){
+        const i = names.findIndex(n => re.test(n));
+        if (i >= 0){ this.roles[role] = i; break; }
+      }
+    }
+  },
+  merge(data){
+    if (!data || !data.length) return 0;
+    let added = 0;
+    for (const rec of data){
+      const no = rec.no;
+      if (this.lastNo !== null && no <= this.lastNo){
+        // Record number went backwards or repeated => likely a
+        // compile-with-table-erase on the logger. Reset the buffer.
+        if (no < this.lastNo - 1){ this.rows = []; this.lastNo = null; }
+        else continue;
+      }
+      this.rows.push({
+        t: parseLoggerTime(rec.time),
+        no: no,
+        vals: rec.vals.map(num)
+      });
+      this.lastNo = no;
+      added++;
+    }
+    // retention
+    const cutoff = Date.now() - CONFIG.historyDays * 86400e3;
+    while (this.rows.length && this.rows[0].t.getTime() < cutoff) this.rows.shift();
+    return added;
+  },
+  latest(){ return this.rows.length ? this.rows[this.rows.length - 1] : null; },
+  roleVal(row, role){
+    const i = this.roles[role];
+    return (i === undefined || !row) ? NaN : row.vals[i];
+  },
+  roleUnits(role){
+    const i = this.roles[role];
+    return i === undefined ? "" : (this.fields[i].units || "");
+  },
+  windowRows(hours){
+    const cutoff = Date.now() - hours * 3600e3;
+    return this.rows.filter(r => r.t.getTime() >= cutoff);
+  }
+};
+
+/* ============================================================================
+   Canvas line/bar chart (dependency-free)
+   ========================================================================= */
+class MiniChart {
+  constructor(canvas, series){
+    // series: [{role, color, kind:"line"|"bar", axis:"L"|"R", fill:bool}]
+    this.cv = canvas; this.series = series;
+    this.padL = 46; this.padR = 46; this.padT = 10; this.padB = 26;
+    new ResizeObserver(() => this.draw(this._rows || [])).observe(canvas);
+  }
+  draw(rows){
+    this._rows = rows;
+    const cv = this.cv, dpr = window.devicePixelRatio || 1;
+    const W = cv.clientWidth, H = cv.clientHeight;
+    if (!W || !H) return;
+    cv.width = W * dpr; cv.height = H * dpr;
+    const g = cv.getContext("2d");
+    g.setTransform(dpr,0,0,dpr,0,0);
+    g.clearRect(0,0,W,H);
+    g.font = "11px Roboto, Arial, sans-serif";
+
+    const x0 = this.padL, x1 = W - this.padR, y0 = this.padT, y1 = H - this.padB;
+    if (!rows.length){
+      g.fillStyle = "#8a8a8a";
+      g.textAlign = "center";
+      g.fillText("no data in range", (x0+x1)/2, (y0+y1)/2);
+      return;
+    }
+    const t0 = rows[0].t.getTime(), t1 = rows[rows.length-1].t.getTime();
+    const tspan = Math.max(t1 - t0, 1);
+    const X = t => x0 + (t - t0) / tspan * (x1 - x0);
+
+    // per-axis min/max
+    const ax = {L:{min:Infinity,max:-Infinity,used:false}, R:{min:Infinity,max:-Infinity,used:false}};
+    for (const s of this.series){
+      const a = ax[s.axis||"L"]; 
+      for (const r of rows){
+        const v = Store.roleVal(r, s.role);
+        if (isFinite(v)){ a.used = true; if(v<a.min)a.min=v; if(v>a.max)a.max=v; }
+      }
+    }
+    for (const k of ["L","R"]){
+      const a = ax[k];
+      if (!a.used){ a.min=0; a.max=1; continue; }
+      if (a.min === a.max){ a.min -= 1; a.max += 1; }
+      const pad = (a.max - a.min) * 0.08;
+      a.min -= pad; a.max += pad;
+      if (this.series.some(s => (s.axis||"L")===k && s.kind==="bar") && a.min > 0) a.min = 0;
+    }
+    const Y = (v,axis) => {
+      const a = ax[axis||"L"];
+      return y1 - (v - a.min) / (a.max - a.min) * (y1 - y0);
+    };
+
+    // gridlines + left/right tick labels
+    g.strokeStyle = "#D0CFCD"; g.lineWidth = 1;
+    g.textBaseline = "middle";
+    const nTicks = 4;
+    for (let i = 0; i <= nTicks; i++){
+      const fy = y1 - i/nTicks * (y1 - y0);
+      g.beginPath(); g.moveTo(x0, fy); g.lineTo(x1, fy); g.stroke();
+      if (ax.L.used){
+        g.fillStyle = "#545454"; g.textAlign = "right";
+        g.fillText(this.tickFmt(ax.L.min + i/nTicks*(ax.L.max-ax.L.min)), x0 - 6, fy);
+      }
+      if (ax.R.used && this.series.some(s => s.axis === "R")){
+        g.fillStyle = "#545454"; g.textAlign = "left";
+        g.fillText(this.tickFmt(ax.R.min + i/nTicks*(ax.R.max-ax.R.min)), x1 + 6, fy);
+      }
+    }
+    // x-axis time labels
+    g.fillStyle = "#545454"; g.textAlign = "center"; g.textBaseline = "top";
+    const nX = Math.min(6, Math.max(2, Math.floor((x1-x0)/110)));
+    const spanHrs = tspan / 3600e3;
+    for (let i = 0; i <= nX; i++){
+      const tt = new Date(t0 + i/nX * tspan);
+      const lbl = spanHrs <= 26
+        ? tt.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"})
+        : tt.toLocaleDateString([], {month:"short", day:"numeric"}) + " " +
+          tt.toLocaleTimeString([], {hour:"2-digit"});
+      g.fillText(lbl, X(t0 + i/nX*tspan), y1 + 6);
+    }
+
+    // series
+    for (const s of this.series){
+      const axis = s.axis || "L";
+      if (s.kind === "bar"){
+        const bw = Math.max(1, (x1-x0)/Math.max(rows.length,1) * 0.7);
+        g.fillStyle = s.color;
+        for (const r of rows){
+          const v = Store.roleVal(r, s.role);
+          if (!isFinite(v) || v <= 0) continue;
+          const px = X(r.t.getTime()), py = Y(v, axis), pb = Y(Math.max(ax[axis].min,0), axis);
+          g.fillRect(px - bw/2, py, bw, pb - py);
+        }
+        continue;
+      }
+      // optional area fill
+      if (s.fill){
+        g.beginPath();
+        let started = false, lastX = null;
+        for (const r of rows){
+          const v = Store.roleVal(r, s.role);
+          if (!isFinite(v)) continue;
+          const px = X(r.t.getTime()), py = Y(v, axis);
+          if (!started){ g.moveTo(px, Y(Math.max(ax[axis].min,0),axis)); g.lineTo(px, py); started = true; }
+          else g.lineTo(px, py);
+          lastX = px;
+        }
+        if (started){
+          g.lineTo(lastX, Y(Math.max(ax[axis].min,0),axis));
+          g.closePath();
+          g.globalAlpha = 0.12; g.fillStyle = s.color; g.fill(); g.globalAlpha = 1;
+        }
+      }
+      // line (gaps at NAN)
+      g.strokeStyle = s.color; g.lineWidth = 1.8;
+      g.lineJoin = "round"; g.lineCap = "round";
+      g.beginPath();
+      let pen = false;
+      for (const r of rows){
+        const v = Store.roleVal(r, s.role);
+        if (!isFinite(v)){ pen = false; continue; }
+        const px = X(r.t.getTime()), py = Y(v, axis);
+        if (!pen){ g.moveTo(px, py); pen = true; } else g.lineTo(px, py);
+      }
+      g.stroke();
+    }
+  }
+  tickFmt(v){
+    const a = Math.abs(v);
+    if (a >= 1000) return v.toFixed(0);
+    if (a >= 100)  return v.toFixed(0);
+    if (a >= 10)   return v.toFixed(1);
+    return v.toFixed(2);
+  }
+}
+
+/* ============================================================================
+   UI builders
+   ========================================================================= */
+const UI = {
+  charts: [],
+  activeRange: RANGES[2], // 24H default
+  paused: false,
+
+  buildRangeButtons(){
+    const wrap = el("range-btns");
+    wrap.innerHTML = "";
+    for (const r of RANGES){
+      const b = document.createElement("button");
+      b.textContent = r.label;
+      if (r === this.activeRange) b.classList.add("active");
+      b.onclick = () => {
+        this.activeRange = r;
+        wrap.querySelectorAll("button").forEach(x => x.classList.remove("active"));
+        b.classList.add("active");
+        this.redrawCharts();
+      };
+      wrap.appendChild(b);
+    }
+  },
+
+  buildCharts(){
+    const host = el("charts");
+    host.innerHTML = "";
+    this.charts = [];
+    const defs = [
+      { title:"Temperature / RH", show:["airTemp","rh"],
+        series:[
+          {role:"airTemp", color:"#00669A", kind:"line", axis:"L"},
+          {role:"rh",      color:"#238F95", kind:"line", axis:"R"}
+        ],
+        legend:[["Air Temp","#00669A"],["RH","#238F95"]] },
+      { title:"Wind Speed", show:["wsAvg"],
+        series:[
+          {role:"wsMax", color:"#8CCEF0", kind:"line", axis:"L"},
+          {role:"wsAvg", color:"#00669A", kind:"line", axis:"L"}
+        ],
+        legend:[["Avg","#00669A"],["Max","#8CCEF0"]] },
+      { title:"Solar Radiation", show:["solar"],
+        series:[{role:"solar", color:"#127EB7", kind:"line", axis:"L", fill:true}],
+        legend:[] },
+      { title:"Rain / Battery", show:["rain","battV"],
+        series:[
+          {role:"rain",  color:"#2495D3", kind:"bar",  axis:"L"},
+          {role:"battV", color:"#545454", kind:"line", axis:"R"}
+        ],
+        legend:[["Rain (interval)","#2495D3"],["Battery V","#545454"]] }
+    ];
+    for (const d of defs){
+      if (!d.show.some(role => Store.roles[role] !== undefined)) continue;
+      const panel = document.createElement("div");
+      panel.className = "chart-panel";
+      const h = document.createElement("h3");
+      h.textContent = d.title;
+      const lg = document.createElement("span");
+      lg.className = "legend";
+      for (const [name, color] of d.legend){
+        const s = document.createElement("span");
+        const i = document.createElement("i");
+        i.style.background = color;
+        s.appendChild(i);
+        s.appendChild(document.createTextNode(name));
+        lg.appendChild(s);
+      }
+      h.appendChild(lg);
+      const cv = document.createElement("canvas");
+      panel.appendChild(h); panel.appendChild(cv);
+      host.appendChild(panel);
+      this.charts.push(new MiniChart(cv, d.series.filter(s => Store.roles[s.role] !== undefined)));
+    }
+  },
+
+  redrawCharts(){
+    const rows = Store.windowRows(this.activeRange.hours);
+    for (const c of this.charts) c.draw(rows);
+  },
+
+  compassSVG(){
+    return '<svg id="compass" viewBox="0 0 100 100" width="78" height="78" aria-label="wind direction">' +
+      '<circle cx="50" cy="50" r="46" fill="none" stroke="#D0CFCD" stroke-width="2"/>' +
+      '<g font-family="Roboto,Arial,sans-serif" font-size="10" fill="#545454" text-anchor="middle">' +
+      '<text x="50" y="13">N</text><text x="50" y="94">S</text>' +
+      '<text x="91" y="53">E</text><text x="9" y="53">W</text></g>' +
+      '<g id="compass-needle" transform="rotate(0 50 50)">' +
+      '<polygon points="50,14 45,54 55,54" fill="#127EB7"/>' +
+      '<polygon points="50,62 45,54 55,54" fill="#C6C6C6"/></g>' +
+      '<circle cx="50" cy="50" r="4" fill="#545454"/></svg>';
+  },
+
+  buildCards(){
+    const c = el("cards");
+    c.innerHTML = "";
+    const mk = (id, label) => {
+      const d = document.createElement("div");
+      d.className = "card"; d.id = "card-" + id;
+      d.innerHTML = '<div class="label">'+label+'</div>' +
+        '<div class="value"><span class="v">--</span><span class="unit"></span></div>' +
+        '<div class="detail"></div>';
+      c.appendChild(d);
+      return d;
+    };
+    if (Store.roles.airTemp !== undefined) mk("airTemp", ROLE_LABELS.airTemp);
+    if (Store.roles.rh      !== undefined) mk("rh", ROLE_LABELS.rh);
+    if (Store.roles.wsAvg   !== undefined || Store.roles.windDir !== undefined){
+      const d = document.createElement("div");
+      d.className = "card wind"; d.id = "card-wind";
+      d.innerHTML = this.compassSVG() +
+        '<div class="windtxt"><div class="label">Wind</div>' +
+        '<div class="value"><span class="v">--</span><span class="unit"></span></div>' +
+        '<div class="detail"></div></div>';
+      c.appendChild(d);
+    }
+    if (Store.roles.solar !== undefined) mk("solar", ROLE_LABELS.solar);
+    if (Store.roles.rain  !== undefined) mk("rain", "Rain (24 h)");
+    if (Store.roles.battV !== undefined) mk("battV", ROLE_LABELS.battV);
+  },
+
+  setCard(id, val, units, detail, dp){
+    const card = el("card-" + id);
+    if (!card) return;
+    const bad = !isFinite(val);
+    card.classList.toggle("nan", bad);
+    card.querySelector(".v").textContent = bad ? "NAN" : fmt(val, dp);
+    card.querySelector(".unit").textContent = bad ? "" : (units ? " " + units : "");
+    card.querySelector(".detail").textContent = detail || "";
+  },
+
+  updateCards(){
+    const last = Store.latest();
+    if (!last) return;
+    const rows24 = Store.windowRows(24);
+
+    // temp: 24h hi/lo
+    if (Store.roles.airTemp !== undefined){
+      const vs = rows24.map(r => Store.roleVal(r,"airTemp")).filter(isFinite);
+      const hi = vs.length ? Math.max.apply(null, vs) : NaN;
+      const lo = vs.length ? Math.min.apply(null, vs) : NaN;
+      this.setCard("airTemp", Store.roleVal(last,"airTemp"), Store.roleUnits("airTemp"),
+        isFinite(hi) ? "24 h: " + fmt(lo,1) + " / " + fmt(hi,1) : "", 1);
+    }
+    if (Store.roles.rh !== undefined)
+      this.setCard("rh", Store.roleVal(last,"rh"), Store.roleUnits("rh") || "%", "", 0);
+
+    // wind card + compass
+    const wc = el("card-wind");
+    if (wc){
+      const ws = Store.roleVal(last, "wsAvg");
+      const wd = Store.roleVal(last, "windDir");
+      const gust = Store.roleVal(last, "wsMax");
+      wc.classList.toggle("nan", !isFinite(ws) && Store.roles.wsAvg !== undefined);
+      wc.querySelector(".v").textContent = Store.roles.wsAvg !== undefined ? fmt(ws,1) : "--";
+      wc.querySelector(".unit").textContent = " " + (Store.roleUnits("wsAvg") || "");
+      let det = "";
+      if (isFinite(wd)) det += degToCompass(wd) + " (" + fmt(wd,0) + "\u00B0)";
+      if (isFinite(gust)) det += (det ? "  \u00B7  " : "") + "gust " + fmt(gust,1);
+      wc.querySelector(".detail").textContent = det;
+      const needle = document.getElementById("compass-needle");
+      if (needle && isFinite(wd)) needle.setAttribute("transform", "rotate(" + (wd%360) + " 50 50)");
+    }
+
+    if (Store.roles.solar !== undefined)
+      this.setCard("solar", Store.roleVal(last,"solar"), Store.roleUnits("solar") || "W/m\u00B2", "", 0);
+
+    if (Store.roles.rain !== undefined){
+      const tot = rows24.map(r => Store.roleVal(r,"rain")).filter(isFinite).reduce((a,b)=>a+b, 0);
+      this.setCard("rain", tot, Store.roleUnits("rain"),
+        "last interval: " + fmt(Store.roleVal(last,"rain"), 2), 2);
+    }
+    if (Store.roles.battV !== undefined){
+      const bv = Store.roleVal(last,"battV");
+      this.setCard("battV", bv, Store.roleUnits("battV") || "V",
+        isFinite(bv) && bv < 11.5 ? "\u26A0 low" : "", 2);
+      const card = el("card-battV");
+      if (card && isFinite(bv) && bv < 11.5)
+        card.style.borderTopColor = "var(--wwg-critical-rust)";
+    }
+
+    // observation age + status pill
+    const ageMs = Date.now() - last.t.getTime();
+    el("obs-age").textContent = "last record: " + fmtClock(last.t) +
+      " (rec #" + last.no + ")";
+    const pill = el("status-pill"), txt = el("status-txt");
+    pill.classList.remove("live","stale","off");
+    if (ageMs < 2.5 * CONFIG.scanIntervalSec * 1000){ pill.classList.add("live"); txt.textContent = "LIVE"; }
+    else if (ageMs < 8 * CONFIG.scanIntervalSec * 1000){ pill.classList.add("stale"); txt.textContent = "STALE"; }
+    else { pill.classList.add("off"); txt.textContent = "NO RECENT DATA"; }
+  },
+
+  buildTableHead(){
+    const thead = el("tbl").querySelector("thead");
+    let h = "<tr><th>Timestamp</th><th>Rec&nbsp;#</th>";
+    for (const f of Store.fields){
+      h += "<th>" + f.name + (f.units ? '<span class="u">' + f.units + "</span>" : "") + "</th>";
+    }
+    thead.innerHTML = h + "</tr>";
+  },
+
+  updateTable(){
+    const tbody = el("tbl").querySelector("tbody");
+    const rows = Store.rows.slice(-CONFIG.tableRows).reverse();
+    let h = "";
+    for (const r of rows){
+      h += '<tr><td class="time">' + fmtClock(r.t) + "</td><td>" + r.no + "</td>";
+      for (const v of r.vals){
+        const bad = !isFinite(v);
+        h += '<td class="' + (bad ? "nan" : "") + '">' + fmt(v) + "</td>";
+      }
+      h += "</tr>";
+    }
+    tbody.innerHTML = h;
+  },
+
+  refreshAll(){
+    this.updateCards();
+    this.redrawCharts();
+    this.updateTable();
+    el("nl-buf").textContent = Store.rows.length;
+  },
+
+  error(msg){
+    const b = el("err-banner");
+    if (!msg){ b.style.display = "none"; return; }
+    b.style.display = "block";
+    b.textContent = msg;
+  }
+};
+
+/* ============================================================================
+   CSV export
+   ========================================================================= */
+function downloadCSV(){
+  const head = ["TIMESTAMP","RECORD"].concat(Store.fields.map(f => '"' + f.name + '"'));
+  const lines = [head.join(",")];
+  for (const r of Store.rows){
+    lines.push(['"' + r.t.toISOString() + '"', r.no]
+      .concat(r.vals.map(v => isFinite(v) ? v : '"NAN"')).join(","));
+  }
+  const blob = new Blob([lines.join("\r\n")], {type:"text/csv"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = (Store.stationName || CONFIG.station || "station") + ".csv";
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+/* ============================================================================
+   Poll loop
+   ========================================================================= */
+let pollTimer = null, nextPollAt = 0, failures = 0;
+
+function setStationHeader(){
+  const name = CONFIG.stationName || Store.stationName || "Station";
+  el("station-name").textContent = name;
+  el("station-sub").textContent = (CONFIG.scanIntervalSec/60) + "-min data";
+  document.title = name + " \u2013 WWG Station Dashboard";
+  el("nl-src").textContent = CONFIG.apiBase + " \u00B7 " + CONFIG.station;
+}
+
+async function loadStationList(){
+  const list = await DataSource.stations();
+  if (!Array.isArray(list) || !list.length)
+    throw new Error("no stations configured in the API");
+  const sel = el("station-sel");
+  sel.innerHTML = "";
+  for (const st of list){
+    const o = document.createElement("option");
+    o.value = st.id; o.textContent = st.name || st.id;
+    sel.appendChild(o);
+  }
+  if (!CONFIG.station || !list.some(st => st.id === CONFIG.station))
+    CONFIG.station = list[0].id;
+  sel.value = CONFIG.station;
+  sel.onchange = () => {
+    const q = new URLSearchParams(location.search);
+    q.set("station", sel.value);
+    location.search = q.toString();
+  };
+}
+
+async function initialLoad(){
+  try{
+    UI.error("");
+    // 0) station directory (also picks the default station)
+    if (!el("station-sel").options.length) await loadStationList();
+    // 1) fast probe: one record, discovers head/fields, paints immediately
+    const probe = await DataSource.probe();
+    Store.setHead(probe.head);
+    setStationHeader();
+    UI.buildCards();
+    UI.buildCharts();
+    UI.buildTableHead();
+    Store.merge(probe.data);
+    UI.refreshAll();
+
+    // 2) backfill the history window
+    const n = Math.ceil(CONFIG.historyDays * 86400 / CONFIG.scanIntervalSec) + 2;
+    const back = await DataSource.backfill(n);
+    Store.rows = []; Store.lastNo = null;      // replace probe row cleanly
+    Store.setHead(back.head);
+    Store.merge(back.data);
+    UI.refreshAll();
+    el("nl-poll").textContent = fmtClock(new Date());
+    failures = 0;
+    schedule();
+  } catch(e){
+    failures++;
+    UI.error("Initial load failed: " + e.message +
+      " \u2014 retrying in 15 s (API: " + CONFIG.apiBase +
+      ", station: " + (CONFIG.station || "auto") + ").");
+    el("status-txt").textContent = "OFFLINE";
+    setTimeout(initialLoad, 15000);
+  }
+}
+
+async function poll(){
+  if (UI.paused) return;
+  try{
+    const res = (Store.lastNo === null)
+      ? await DataSource.backfill(5)
+      : await DataSource.incremental(Store.lastNo);
+    if (res.head && res.head.fields && res.head.fields.length &&
+        res.head.fields.length !== Store.fields.length){
+      // table definition changed (recompile) — rebuild UI
+      Store.setHead(res.head);
+      UI.buildCards(); UI.buildCharts(); UI.buildTableHead();
+    }
+    const added = Store.merge(res.data || []);
+    if (added) UI.refreshAll(); else UI.updateCards(); // age/status still tick
+    el("nl-poll").textContent = fmtClock(new Date());
+    failures = 0;
+    UI.error("");
+  } catch(e){
+    failures++;
+    UI.error("Poll failed (" + failures + "\u00D7): " + e.message +
+      " \u2014 will keep retrying.");
+    UI.updateCards();
+  }
+  schedule();
+}
+
+function schedule(){
+  clearTimeout(pollTimer);
+  // gentle backoff on repeated failures, capped at 5 min
+  const delay = Math.min(CONFIG.refreshSec * 1000 * Math.max(1, failures),
+                         300000);
+  nextPollAt = Date.now() + delay;
+  pollTimer = setTimeout(poll, delay);
+}
+
+/* countdown display */
+setInterval(() => {
+  if (UI.paused){ el("nl-next").textContent = "paused"; return; }
+  const s = Math.max(0, Math.round((nextPollAt - Date.now())/1000));
+  el("nl-next").textContent = s + " s";
+}, 1000);
+
+/* toolbar */
+el("btn-pause").onclick = function(){
+  UI.paused = !UI.paused;
+  this.textContent = UI.paused ? "Resume updates" : "Pause updates";
+  if (!UI.paused){ failures = 0; schedule(); }
+};
+el("btn-csv").onclick = downloadCSV;
+
+UI.buildRangeButtons();
+initialLoad();
+</script>
+</body>
+</html>
