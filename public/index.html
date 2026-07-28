@@ -529,11 +529,18 @@ class MiniChart {
     }
     for (const k of ["L","R"]){
       const a = ax[k];
+      const hasBar = this.series.some(s => (s.axis||"L") === k && s.kind === "bar");
       if (!a.used){ a.min=0; a.max=1; continue; }
-      if (a.min === a.max){ a.min -= 1; a.max += 1; }
-      const pad = (a.max - a.min) * 0.08;
-      a.min -= pad; a.max += pad;
-      if (this.series.some(s => (s.axis||"L")===k && s.kind==="bar") && a.min > 0) a.min = 0;
+      const dataMin = a.min;
+      if (a.min === a.max){
+        if (hasBar && a.min >= 0){ a.min = 0; a.max = a.max > 0 ? a.max * 1.2 : 1; }
+        else { a.min -= 1; a.max += 1; }
+      } else {
+        const pad = (a.max - a.min) * 0.08;
+        a.min -= pad; a.max += pad;
+      }
+if (dataMin >= 0 && a.min < 0) a.min = 0;  // non-negative data never below zero
+      if (hasBar && a.min > 0) a.min = 0;                  // bars always baseline at 0
     }
     const Y = (v,axis) => {
       const a = ax[axis||"L"];
