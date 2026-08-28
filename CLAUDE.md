@@ -39,8 +39,10 @@ public_name values — the WWG station `code` stays server-side by design.
 - `functions/api/stations.js` — GET /api/stations
 - `functions/api/precip.js` — GET /api/precip (calendar totals, KV-backed)
 - `functions/api/stream.js` — GET /api/stream (USGS gauges)
+- `tests/frontend.test.js` — front-end suite, `node tests/frontend.test.js`
 
 Underscore-prefixed files in functions/ are shared modules, not routes.
+Pages only publishes `public/`, so `tests/` is never served.
 
 ## Core contract (do not break)
 
@@ -208,11 +210,24 @@ history-table row capping, chart zoom/pan clamping at both limits,
 wheel/drag/pinch/double-click gestures, tile day-boundary attribution, and
 battery excursion counting.
 
-Suites are written ad hoc and are NOT in the repo — there is no test
-directory and no package.json. The DOM stub needs `document.createTextNode`
-as well as `createElement`/`getElementById`, and `getElementById` has to
-resolve cards created at runtime or every tile assertion silently passes
-against a null card.
+The front-end suite IS in the repo and takes no arguments:
+
+    node tests/frontend.test.js
+
+73 assertions, exits non-zero on failure. It covers role auto-detection,
+tile linking, #param deep links and Back, history-table row capping, chart
+zoom/pan clamping, wheel/drag/pinch/double-click gestures, day-boundary
+attribution and the battery excursion count. Run it after touching
+public/index.html — it is the only thing standing between a typo and a
+broken dashboard, since there is no build step to catch anything.
+
+Backend/endpoint suites are still ad hoc and not committed. There is no
+package.json and no test runner; tests are plain Node scripts, run directly.
+
+Two DOM-stub requirements that are easy to get wrong (both documented in the
+test header): `document.createTextNode` is needed as well as `createElement`,
+and `getElementById` must resolve cards created at runtime — otherwise every
+tile assertion reads through a null card and silently PASSES.
 
 ## Known state / open items (Aug 28, 2026)
 
@@ -221,10 +236,8 @@ against a null card.
   functions/api/stream.js exists and no endpoint leaks e.message.
 - The dashboard UI overhaul is committed as e4dfdf7: per-parameter history
   tables, chart zoom/pan, today/yesterday tile figures, merged precip tile,
-  battery excursion count, page data table removed.
-- AT TIME OF WRITING main is 2 commits AHEAD of origin (e4dfdf7 and 16efb0d,
-  a header-comment fix) and NOT pushed, so none of the above is deployed yet.
-  Check `git status` before assuming the live site matches this file.
+  battery excursion count, page data table removed. Pushed and verified live
+  on both www.broadwaywx.com and station-dashboard.pages.dev.
 - broadwaywx.com blocked on WWG's corporate network as a "newly registered
   domain" — ages out ~30 days; pages.dev works there meanwhile.
 - Bare domain broadwaywx.com not yet added as a custom domain (www only).
