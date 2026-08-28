@@ -26,9 +26,11 @@ public_name values — the WWG station `code` stays server-side by design.
 ## File map
 
 - `public/index.html` — the whole front end: WWG-branded CSS, dependency-free
-  canvas charts (class `MiniChart`), current-conditions cards, precip totals
-  tile, stream-gauge panels, data table, CSV export. No build step, no
-  external assets (logo is an inline data URI).
+  canvas charts (class `MiniChart`, zoom/pan), current-conditions tiles that
+  link through to per-parameter history tables, one merged precipitation tile,
+  stream-gauge panels, CSV export. No build step, no external assets (logo is
+  an inline data URI). There is no longer a full data table on the page — it
+  was replaced by the per-parameter tables (Aug 2026).
 - `functions/api/_config.js` — station allow-list. THE file to edit for
   stations, fields, conversions, stream gauges.
 - `functions/api/_lib.js` — WWG API client + contract translation +
@@ -87,6 +89,9 @@ Station has no daily/hourly tables, so daily totals are computed from
   `dayOf()` using each record's own embedded local timestamp (DST-safe).
 - Buckets: today (live 1-min), yesterday, 7 days (calendar, incl today),
   month-to-date, YTD. All station-local calendar days.
+- The front end shows `today` from its own buffer (live, no KV round-trip) and
+  takes yesterday/7-day/month/YTD from this endpoint, so `today` in the
+  response is currently unused by the tile. Keep returning it.
 - Fallback mode (no KV binding): queries station.summaryInterval table.
 
 ## Stream gauges (/api/stream)
@@ -117,6 +122,31 @@ optional env USGS_API_KEY -> X-Api-Key.
 - Role auto-detection (ROLE_PATTERNS) maps field names to cards/charts;
   pinned names in CONFIG.fieldMap win. Cards/panels render only for roles
   present.
+- Chart zoom/pan lives on the chart instance as `view = [t0,t1]` (null = full
+  extent), clamped inside the data every draw; zooming back out past the full
+  span clears it. Wheel zooms at the cursor, drag/shift+wheel pans, pinch on
+  touch, double-click or `resetZoom()` restores. The y-axis rescales to the
+  visible window, and one point either side of it is drawn (then clipped) so
+  lines entering the view stay connected. Zoom is PER CHART on purpose — the
+  fixed 7-day stream panels must not be dragged around by the station charts.
+  Changing the range buttons clears every chart's zoom.
+- Tiles link to per-parameter history tables. `PARAM_VIEWS` maps a param id to
+  a label + columns; `Drill` renders the overlay; the open view is mirrored in
+  the URL as `#param=<id>` so it is shareable and Back closes it. Only params
+  whose roles the station actually reports become clickable. Wind is one tile
+  but a three-column table (speed/gust/direction).
+- Tile day figures (`dayStats`) use the SAME day attribution as the precip
+  backend: a record stamped T covers (T - interval, T], so a local-midnight
+  record belongs to the previous day. Implemented by subtracting 1 ms before
+  reading the local date — DST-safe because timestamps are already local.
+  Keep this in step with `dayOf()` server-side or the tiles and the KV totals
+  will disagree by one record.
+- Battery tile: `BATT_LOW_V` (11.5) flags the current reading, `BATT_DIP_V`
+  (12) is the level whose 24 h excursions are counted. The count is
+  EXCURSIONS, not readings — a continuous run below the line counts once, and
+  a NAN mid-run does not split it. Border colour is reassigned every refresh
+  (rust / amber / none) so the tile recovers; do not go back to setting it
+  only on the low branch.
 - WWG brand palette: Deep Blue #00669A, Horizon Blue #127EB7, Bright Blue
   #2495D3, Sky Blue #8CCEF0, teal #238F95 (ok/status), amber #C8993F
   (stale), rust #B5492A (error/NAN). Fonts DM Sans/Roboto with Arial
@@ -142,7 +172,13 @@ auto-deploys (~1-2 min). GOTCHAS learned the hard way:
 Local dev (optional): `npx wrangler pages dev public` auto-detects
 functions/. Supply secrets via a `.dev.vars` file (WWG_API_KEY=...) and
 `--kv PRECIP_KV`. If you create .dev.vars, ADD IT TO .gitignore — the repo
-is PUBLIC.
+is PUBLIC, and there is no .gitignore in the repo yet, so you have to
+create one.
+
+For front-end-only work (layout, tiles, charts) you don't need the API key:
+serve `public/` from any static server and stub `/api/*` with synthetic data
+on the same origin. Note the API sets no CORS headers, so a local page cannot
+be pointed at production via `?api=` — the browser will block it.
 
 ## Policies & posture (important)
 
@@ -166,17 +202,39 @@ with minimal DOM stubs. Always `node --check` every touched file before
 committing. Prior suites covered: dataquery contract shape, NAN/INF
 parsing, synthetic recno monotonicity, table-reset recovery, KV backfill
 order/resume/completion, midnight day-attribution, year-boundary
-exclusion, mm->in conversion, USGS sorting/bad-value filtering.
+exclusion, mm->in conversion, USGS sorting/bad-value filtering; and on the
+front end, role auto-detection, tile linking, #param deep links and Back,
+history-table row capping, chart zoom/pan clamping at both limits,
+wheel/drag/pinch/double-click gestures, tile day-boundary attribution, and
+battery excursion counting.
+
+Suites are written ad hoc and are NOT in the repo — there is no test
+directory and no package.json. The DOM stub needs `document.createTextNode`
+as well as `createElement`/`getElementById`, and `getElementById` has to
+resolve cards created at runtime or every tile assertion silently passes
+against a null card.
 
 ## Known state / open items (Aug 28, 2026)
 
-- Everything above is committed EXCEPT possibly the latest batch (stream
-  gauges + data.js error revert) — verify functions/api/stream.js exists
-  and data.js:~49 does not concatenate e.message before assuming deployed.
+- Stream gauges and the data.js error revert ARE committed (8f39787 and
+  earlier) — the previous note asking you to verify them is resolved.
+  functions/api/stream.js exists and no endpoint leaks e.message.
+- The dashboard UI overhaul is committed as e4dfdf7: per-parameter history
+  tables, chart zoom/pan, today/yesterday tile figures, merged precip tile,
+  battery excursion count, page data table removed.
+- AT TIME OF WRITING main is 2 commits AHEAD of origin (e4dfdf7 and 16efb0d,
+  a header-comment fix) and NOT pushed, so none of the above is deployed yet.
+  Check `git status` before assuming the live site matches this file.
 - broadwaywx.com blocked on WWG's corporate network as a "newly registered
   domain" — ages out ~30 days; pages.dev works there meanwhile.
 - Bare domain broadwaywx.com not yet added as a custom domain (www only).
 - Precip mm->in conversion confirmed by owner; verify plausibility after
   first big storm. WindDir unit label comes from WWG metadata ("°").
-- Ideas parked: dew point card, multi-station map, wind rose, cumulative
-  rain chart, 60-min WWG interval if ever added to the logger program.
+- The history overlay does not trap focus — Tab can walk into the page
+  behind it. Escape and the close button work, so it is usable, but it is
+  not a fully compliant modal.
+- Ideas parked: dew point card (DewPoint is already queried and lands in the
+  full CSV export, but has no ROLE_PATTERNS entry, so it gets no tile, no
+  chart and no history table), multi-station map, wind rose, cumulative rain
+  chart, synchronised zoom across charts, 60-min WWG interval if ever added
+  to the logger program.
