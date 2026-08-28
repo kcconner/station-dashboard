@@ -253,6 +253,11 @@
   </div>
   <div class="charts" id="charts"></div>
 
+  <div class="sec-head" id="stream-head" style="display:none"><h2>Stream Gauges</h2><div class="rule"></div>
+    <span style="font-size:12px;color:var(--wwg-graphite)">USGS provisional data &middot; 7-day view</span>
+  </div>
+  <div class="charts" id="stream-charts"></div>
+
   <!-- ============ data table ============ -->
   <div class="sec-head"><h2>Data Table</h2><div class="rule"></div>
     <div class="toolbar">
@@ -506,6 +511,7 @@ class MiniChart {
     g.setTransform(dpr,0,0,dpr,0,0);
     g.clearRect(0,0,W,H);
     g.font = "11px Roboto, Arial, sans-serif";
+    const SVAL = (s, r) => s.get ? s.get(r) : Store.roleVal(r, s.role);
 
     const x0 = this.padL, x1 = W - this.padR, y0 = this.padT, y1 = H - this.padB;
     if (!rows.length){
@@ -523,7 +529,7 @@ class MiniChart {
     for (const s of this.series){
       const a = ax[s.axis||"L"]; 
       for (const r of rows){
-        const v = Store.roleVal(r, s.role);
+        const v = SVAL(s, r);
         if (isFinite(v)){ a.used = true; if(v<a.min)a.min=v; if(v>a.max)a.max=v; }
       }
     }
@@ -583,7 +589,7 @@ if (dataMin >= 0 && a.min < 0) a.min = 0;  // non-negative data never below zero
         const bw = Math.max(1, (x1-x0)/Math.max(rows.length,1) * 0.7);
         g.fillStyle = s.color;
         for (const r of rows){
-          const v = Store.roleVal(r, s.role);
+          const v = SVAL(s, r);
           if (!isFinite(v) || v <= 0) continue;
           const px = X(r.t.getTime()), py = Y(v, axis), pb = Y(Math.max(ax[axis].min,0), axis);
           g.fillRect(px - bw/2, py, bw, pb - py);
@@ -595,7 +601,7 @@ if (dataMin >= 0 && a.min < 0) a.min = 0;  // non-negative data never below zero
         g.beginPath();
         let started = false, lastX = null;
         for (const r of rows){
-          const v = Store.roleVal(r, s.role);
+          const v = SVAL(s, r);
           if (!isFinite(v)) continue;
           const px = X(r.t.getTime()), py = Y(v, axis);
           if (!started){ g.moveTo(px, Y(Math.max(ax[axis].min,0),axis)); g.lineTo(px, py); started = true; }
@@ -614,7 +620,7 @@ if (dataMin >= 0 && a.min < 0) a.min = 0;  // non-negative data never below zero
       g.beginPath();
       let pen = false;
       for (const r of rows){
-        const v = Store.roleVal(r, s.role);
+        const v = SVAL(s, r);
         if (!isFinite(v)){ pen = false; continue; }
         const px = X(r.t.getTime()), py = Y(v, axis);
         if (!pen){ g.moveTo(px, py); pen = true; } else g.lineTo(px, py);
@@ -950,6 +956,7 @@ async function initialLoad(){
     failures = 0;
     schedule();
     loadPrecipSummary();
+    loadStreamGauges();
   } catch(e){
     failures++;
     UI.error("Initial load failed: " + e.message +
@@ -1028,6 +1035,49 @@ async function loadPrecipSummary(){
 }
 setInterval(loadPrecipSummary, 300000);
   
+
+async function loadStreamGauges(){
+  try{
+    const r = await DataSource.fetchJson(CONFIG.apiBase + "/stream?station=" +
+      encodeURIComponent(CONFIG.station));
+    const host = el("stream-charts");
+    host.innerHTML = "";
+    if (!r.gauges || !r.gauges.length){ el("stream-head").style.display = "none"; return; }
+    el("stream-head").style.display = "flex";
+    for (const g of r.gauges){
+      // merge stage+flow onto a shared time axis
+      const byT = new Map();
+      g.stage.t.forEach((t,i) => byT.set(t, {t:new Date(t*1000), stage:g.stage.v[i], flow:NaN}));
+      g.flow.t.forEach((t,i) => {
+        const row = byT.get(t) || {t:new Date(t*1000), stage:NaN, flow:NaN};
+        row.flow = g.flow.v[i]; byT.set(t, row);
+      });
+      const rows = [...byT.values()].sort((a,b) => a.t - b.t);
+
+      const panel = document.createElement("div");
+      panel.className = "chart-panel";
+      const h = document.createElement("h3");
+      h.textContent = g.label;
+      const lg = document.createElement("span");
+      lg.className = "legend";
+      const latest = rows[rows.length-1] || {};
+      const cur = [];
+      if (isFinite(latest.stage)) cur.push(fmt(latest.stage,2) + " " + g.stage.unit);
+      if (isFinite(latest.flow))  cur.push(fmt(latest.flow,1) + " " + g.flow.unit);
+      lg.textContent = cur.join("  \u00B7  ");
+      h.appendChild(lg);
+      const cv = document.createElement("canvas");
+      panel.appendChild(h); panel.appendChild(cv);
+      host.appendChild(panel);
+      new MiniChart(cv, [
+        {get: r => r.stage, color:"#00669A", kind:"line", axis:"L", fill:true},
+        {get: r => r.flow,  color:"#238F95", kind:"line", axis:"R"}
+      ]).draw(rows);
+    }
+  }catch(e){ /* leave section hidden */ }
+}
+setInterval(loadStreamGauges, 900000);
+
 UI.buildRangeButtons();
 initialLoad();
 </script>
