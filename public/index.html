@@ -28,6 +28,8 @@
      ?api=/api                API root override
      ?refresh=60              poll period, seconds
      ?days=7                  history window to backfill/retain
+  URL fragment (set by clicking a tile; shareable / back-button aware):
+     #param=airTemp           opens that parameter's history table
 
   NOTE (public site): station display names come from the API config. Per WWG
   policy, do not put customer names in public-facing station names without
@@ -115,6 +117,8 @@
     text-transform:uppercase;letter-spacing:.09em;
   }
   .sec-head .rule{flex:1;height:1px;background:var(--wwg-gray-200)}
+  .sec-head .hint{font-size:11.5px;color:var(--wwg-graphite);opacity:.8}
+  @media (max-width:620px){.sec-head .hint{display:none}}
 
   /* ---------- current conditions cards ---------- */
   .cards{
@@ -144,23 +148,67 @@
   .card.nan .value{color:var(--wwg-critical-rust);font-size:24px}
   .card.wind{flex-direction:row;gap:10px;align-items:center}
   .card.wind .windtxt{display:flex;flex-direction:column;flex:1;height:100%}
-  .card.precip{grid-column:span 2}
+  .card.wind,.card.precip{grid-column:span 2}
+  /* a 2-column tile would overflow a 1-column grid on narrow screens */
+  @media (max-width:400px){.card.wind,.card.precip{grid-column:span 1}}
+
+  /* today / yesterday summary rows at the foot of a tile */
+  .card.has-stats .detail{margin-top:0}
+  .card .stats{
+    margin-top:auto;padding-top:8px;
+    display:flex;flex-direction:column;gap:2px;
+  }
+  .card .st{
+    display:flex;justify-content:space-between;align-items:baseline;gap:10px;
+    font-size:12px;color:var(--wwg-graphite);
+  }
+  .card .st .sv{
+    font-family:var(--wwg-font-mono);font-size:11.5px;color:var(--ink);
+    white-space:nowrap;
+  }
+  .card .st.cap{
+    font-size:9.5px;text-transform:uppercase;letter-spacing:.07em;opacity:.75;
+    border-bottom:1px solid var(--wwg-gray-100);padding-bottom:3px;margin-bottom:2px;
+  }
+  .card .st.cap .sv{
+    font-family:var(--wwg-font-body);font-size:9.5px;color:var(--wwg-graphite);
+    letter-spacing:.07em;
+  }
   .precip-rows{display:flex;justify-content:space-between;gap:4px;margin-top:8px}
   .precip-rows .pr{text-align:center;flex:1}
   .precip-rows .pr .pv{font-family:var(--wwg-font-headline);font-size:19px;font-weight:600;color:var(--wwg-deep-blue)}
   .precip-rows .pr .pl{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--wwg-graphite);margin-top:2px}
   #compass{flex:0 0 78px}
 
+  /* tiles that link through to a parameter's history table */
+  .card.linked{cursor:pointer;transition:border-top-color .12s,box-shadow .12s}
+  .card.linked:hover{
+    border-top-color:var(--wwg-bright-blue);
+    box-shadow:0 2px 10px rgba(0,0,0,.09);
+  }
+  .card.linked:focus-visible{outline:2px solid var(--wwg-bright-blue);outline-offset:2px}
+  .card .drill{
+    font-size:10.5px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--wwg-horizon-blue);
+    margin-top:4px;opacity:0;transition:opacity .12s;
+  }
+  .card.linked:hover .drill,.card.linked:focus-visible .drill{opacity:1}
+  /* touch devices get no hover, so keep the affordance visible */
+  @media (hover:none){.card.linked .drill{opacity:.75}}
+
   /* ---------- charts ---------- */
   .range-btns{display:flex;gap:6px;flex-wrap:wrap}
-  .range-btns button, .toolbar button{
+  .range-btns button, .toolbar button, .ov-sub button, .ov-note button{
     font-family:var(--wwg-font-body);
     font-size:12.5px;font-weight:500;
     padding:5px 13px;border-radius:4px;cursor:pointer;
     border:1px solid var(--wwg-gray-200);
     background:#fff;color:var(--wwg-graphite);
   }
-  .range-btns button:hover{border-color:var(--wwg-horizon-blue);color:var(--wwg-horizon-blue)}
+  .range-btns button:hover, .toolbar button:hover,
+  .ov-sub button:hover, .ov-note button:hover{
+    border-color:var(--wwg-horizon-blue);color:var(--wwg-horizon-blue);
+  }
   .range-btns button.active{
     background:var(--wwg-horizon-blue);border-color:var(--wwg-horizon-blue);color:#fff;
   }
@@ -179,11 +227,31 @@
   .legend{display:inline-flex;gap:12px;font-family:var(--wwg-font-body);font-size:11.5px;font-weight:400}
   .legend span{display:inline-flex;align-items:center;gap:5px}
   .legend i{width:14px;height:3px;border-radius:2px;display:inline-block}
-  .chart-panel canvas{width:100%;height:210px;display:block;margin-top:6px}
+  .chart-panel canvas{
+    width:100%;height:210px;display:block;margin-top:6px;
+    touch-action:none;          /* we handle drag-pan and pinch-zoom ourselves */
+    cursor:grab;
+  }
+  .chart-panel canvas.dragging{cursor:grabbing}
   .chart-panel.hidden{display:none}
 
-  /* ---------- data table ---------- */
+  /* zoom indicator + reset, shown only while a chart is zoomed */
+  .chart-panel .zoom{
+    margin-left:auto;display:none;gap:8px;align-items:center;
+    font-family:var(--wwg-font-body);font-size:11px;font-weight:400;
+    color:var(--wwg-graphite);
+  }
+  .chart-panel.zoomed .zoom{display:inline-flex}
+  .chart-panel .zoom button{
+    font-family:var(--wwg-font-body);font-size:11px;padding:2px 8px;
+    border:1px solid var(--wwg-gray-200);border-radius:3px;
+    background:#fff;color:var(--wwg-graphite);cursor:pointer;
+  }
+  .chart-panel .zoom button:hover{border-color:var(--wwg-horizon-blue);color:var(--wwg-horizon-blue)}
+
+  /* ---------- tables (parameter history overlay) ---------- */
   .toolbar{display:flex;gap:8px;align-items:center}
+  #page-toolbar{margin-top:24px}
   .tbl-wrap{
     background:var(--card-bg);
     border:1px solid var(--wwg-gray-100);border-radius:6px;
@@ -207,6 +275,50 @@
   tbody tr:nth-child(even){background:#FAFBFB}
   tbody td.nan{color:var(--wwg-critical-rust);font-weight:600}
   tbody td.time{font-family:var(--wwg-font-body)}
+  tbody td.empty{text-align:center;color:var(--wwg-graphite);font-family:var(--wwg-font-body);padding:22px}
+
+  /* ---------- parameter history overlay ---------- */
+  .ov{
+    position:fixed;inset:0;z-index:50;display:none;
+    background:rgba(28,36,44,.55);padding:24px 18px;
+  }
+  .ov.open{display:flex;align-items:flex-start;justify-content:center}
+  .ov-panel{
+    background:var(--card-bg);border-radius:8px;
+    width:100%;max-width:800px;max-height:calc(100vh - 48px);
+    display:flex;flex-direction:column;overflow:hidden;
+    box-shadow:0 14px 44px rgba(0,0,0,.3);
+  }
+  .ov-head{
+    display:flex;align-items:center;gap:14px;
+    padding:14px 16px;border-bottom:1px solid var(--wwg-gray-100);
+  }
+  .ov-head h2{
+    font-family:var(--wwg-font-headline);
+    font-size:16px;font-weight:600;color:var(--wwg-deep-blue);
+    text-transform:uppercase;letter-spacing:.06em;
+  }
+  .ov-head .sp,.ov-sub .sp{flex:1}
+  .ov-close{
+    border:1px solid var(--wwg-gray-200);background:#fff;color:var(--wwg-graphite);
+    border-radius:4px;font-size:17px;line-height:1;padding:5px 11px;cursor:pointer;
+  }
+  .ov-close:hover{border-color:var(--wwg-critical-rust);color:var(--wwg-critical-rust)}
+  .ov-sub{
+    display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+    padding:10px 16px;border-bottom:1px solid var(--wwg-gray-100);
+  }
+  .ov-body{flex:1;min-height:0;overflow:auto}
+  .ov-body.tbl-wrap{border:0;border-radius:0;max-height:none}
+  .ov-note{
+    display:flex;gap:12px;align-items:center;flex-wrap:wrap;
+    padding:10px 16px;border-top:1px solid var(--wwg-gray-100);
+    font-size:12px;color:var(--wwg-graphite);
+  }
+  @media (max-width:620px){
+    .ov{padding:0}
+    .ov-panel{max-width:none;max-height:100vh;border-radius:0}
+  }
 
   /* ---------- footer / status line ---------- */
   .netline{
@@ -249,6 +361,7 @@
 
   <!-- ============ charts ============ -->
   <div class="sec-head"><h2>History</h2><div class="rule"></div>
+    <span class="hint">scroll to zoom &middot; drag to pan &middot; double-click to reset</span>
     <div class="range-btns" id="range-btns"></div>
   </div>
   <div class="charts" id="charts"></div>
@@ -258,14 +371,11 @@
   </div>
   <div class="charts" id="stream-charts"></div>
 
-  <!-- ============ data table ============ -->
-  <div class="sec-head"><h2>Data Table</h2><div class="rule"></div>
-    <div class="toolbar">
-      <button id="btn-pause">Pause updates</button>
-      <button id="btn-csv">Download CSV</button>
-    </div>
+  <!-- ============ controls ============ -->
+  <div class="toolbar" id="page-toolbar">
+    <button id="btn-pause">Pause updates</button>
+    <button id="btn-csv">Download CSV</button>
   </div>
-  <div class="tbl-wrap"><table id="tbl"><thead></thead><tbody></tbody></table></div>
 
   <div id="err-banner"></div>
   <div class="netline">
@@ -281,6 +391,26 @@
   are station-local. URL parameters: ?station= &amp;refresh= &amp;days=
 </footer>
 
+<!-- ============ parameter history overlay (opened by clicking a tile) ============ -->
+<div class="ov" id="drill" role="dialog" aria-modal="true" aria-labelledby="drill-title">
+  <div class="ov-panel">
+    <div class="ov-head">
+      <h2 id="drill-title">Parameter</h2>
+      <div class="sp"></div>
+      <button class="ov-close" id="drill-close" aria-label="Close history table">&times;</button>
+    </div>
+    <div class="ov-sub">
+      <div class="range-btns" id="drill-ranges"></div>
+      <div class="sp"></div>
+      <button id="drill-csv">Download CSV</button>
+    </div>
+    <div class="ov-body tbl-wrap" id="drill-body">
+      <table id="drill-tbl"><thead></thead><tbody></tbody></table>
+    </div>
+    <div class="ov-note" id="drill-note"></div>
+  </div>
+</div>
+
 <script>
 "use strict";
 /* ============================================================================
@@ -294,7 +424,8 @@ const CONFIG = {
   historyDays: 7,        // backfill window / buffer retention
   stationName: "",       // "" = use logger's reported station name
   requestTimeoutMs: 30000,
-  tableRows: 30,         // rows shown in the data table
+  drillRows: 2000,       // rows rendered in a parameter history table before
+                         // the "show all" opt-in (CSV always has everything)
 
   /* Explicit field-role mapping. Leave a role "" to auto-detect by name.
      Pin these per program family if auto-detect guesses wrong
@@ -328,6 +459,11 @@ const ROLE_LABELS = {
   wsMax:"Wind Gust", windDir:"Wind Direction", solar:"Solar",
   rain:"Rain", battV:"Battery"
 };
+
+/* Battery thresholds. LOW flags the current reading; DIP is the level whose
+   24-hour excursions get counted on the tile. */
+const BATT_LOW_V = 11.5;
+const BATT_DIP_V = 12;
 
 const RANGES = [
   {label:"1H",  hours:1},
@@ -384,6 +520,73 @@ function degToCompass(d){
   return pts[Math.round(((d % 360) + 360) % 360 / 22.5) % 16];
 }
 function el(id){ return document.getElementById(id); }
+
+/* Station-local calendar day as a comparable number (YYYYMMDD). */
+function localDayNum(d){
+  return d.getFullYear()*10000 + (d.getMonth()+1)*100 + d.getDate();
+}
+
+/* Per-day min/max/avg/total for the requested roles, in a single pass over the
+   buffer. Returns [today, yesterday], each {role:{min,max,avg,sum,n}}.
+
+   Day attribution matches the precip backend (see CLAUDE.md): a record stamped
+   T covers (T - interval, T], so a record landing exactly on local midnight
+   belongs to the PREVIOUS day. Subtracting 1 ms before reading the date does
+   that, and stays correct across DST because every timestamp is local already. */
+function dayStats(roles){
+  const now = new Date();
+  const todayN = localDayNum(now);
+  const yestN  = localDayNum(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
+  const blank = () => ({min:Infinity, max:-Infinity, sum:0, n:0, avg:NaN});
+  const out = [{}, {}];
+  for (const role of roles){ out[0][role] = blank(); out[1][role] = blank(); }
+
+  for (const r of Store.rows){
+    const dn = localDayNum(new Date(r.t.getTime() - 1));
+    const off = dn === todayN ? 0 : (dn === yestN ? 1 : -1);
+    if (off < 0) continue;
+    for (const role of roles){
+      const v = Store.roleVal(r, role);
+      if (!isFinite(v)) continue;
+      const a = out[off][role];
+      if (v < a.min) a.min = v;
+      if (v > a.max) a.max = v;
+      a.sum += v; a.n++;
+    }
+  }
+  for (const o of out)
+    for (const role of roles) o[role].avg = o[role].n ? o[role].sum / o[role].n : NaN;
+  return out;
+}
+
+/* "lo / hi" for a day bucket, or "--" when the day has no good readings. */
+function pairMinMax(a, dp){
+  return (a && a.n) ? fmt(a.min, dp) + " / " + fmt(a.max, dp) : "--";
+}
+/* "peak / mean" for a day bucket. */
+function pairMaxAvg(a, dp){
+  return (a && a.n) ? fmt(a.max, dp) + " / " + fmt(a.avg, dp) : "--";
+}
+
+/* How many times `role` went below `threshold` over the last `hours`.
+
+   Counts separate excursions, not readings: a run of consecutive values under
+   the threshold is one, however long it lasts. A NAN is skipped rather than
+   treated as a recovery, so a gap partway through an excursion doesn't get
+   reported as two. */
+function countBelow(role, hours, threshold){
+  let count = 0, below = false;
+  for (const r of Store.windowRows(hours)){
+    const v = Store.roleVal(r, role);
+    if (!isFinite(v)) continue;
+    if (v < threshold){
+      if (!below){ count++; below = true; }
+    } else {
+      below = false;
+    }
+  }
+  return count;
+}
 
 /* ============================================================================
    DataSource — WWG data API adapter (Azure Functions -> WWG database)
@@ -494,12 +697,107 @@ const Store = {
 /* ============================================================================
    Canvas line/bar chart (dependency-free)
    ========================================================================= */
+const MIN_ZOOM_SPAN_MS = 60e3;   // never zoom tighter than one minute
+
 class MiniChart {
   constructor(canvas, series){
     // series: [{role, color, kind:"line"|"bar", axis:"L"|"R", fill:bool}]
     this.cv = canvas; this.series = series;
     this.padL = 46; this.padR = 46; this.padT = 10; this.padB = 26;
+    this.view = null;    // [t0,t1] ms, or null = full extent of the data
+    this.onView = null;  // callback(isZoomed) — panel wires this to show "reset"
+    this._full = null;   // [t0,t1] of the rows last drawn
+    this._ptrs = new Map();
     new ResizeObserver(() => this.draw(this._rows || [])).observe(canvas);
+    this.bindZoom();
+  }
+
+  /* ---- zoom / pan interaction ------------------------------------------ */
+  bindZoom(){
+    const cv = this.cv;
+
+    cv.addEventListener("wheel", (e) => {
+      if (!this._full) return;
+      e.preventDefault();                       // needs passive:false
+      if (e.shiftKey){                          // shift+wheel = pan sideways
+        this.panPx(-(e.deltaY || e.deltaX));
+        return;
+      }
+      const frac = this.fracAt(e.clientX);
+      this.zoomAt(frac, e.deltaY > 0 ? 1.2 : 1/1.2);
+    }, {passive:false});
+
+    cv.addEventListener("pointerdown", (e) => {
+      cv.setPointerCapture(e.pointerId);
+      this._ptrs.set(e.pointerId, e.clientX);
+      if (this._ptrs.size === 1){ this._lastX = e.clientX; cv.classList.add("dragging"); }
+      else if (this._ptrs.size === 2){ this._pinch = this.pinchState(); }
+    });
+
+    cv.addEventListener("pointermove", (e) => {
+      if (!this._ptrs.has(e.pointerId)) return;
+      this._ptrs.set(e.pointerId, e.clientX);
+      if (this._ptrs.size === 1){
+        const dx = e.clientX - this._lastX;
+        this._lastX = e.clientX;
+        if (dx) this.panPx(dx);
+      } else if (this._ptrs.size === 2 && this._pinch){
+        const now = this.pinchState();
+        if (now.dist > 4 && this._pinch.dist > 4)
+          this.zoomAt(this.fracAt(now.mid), this._pinch.dist / now.dist);
+        this._pinch = now;
+      }
+    });
+
+    const release = (e) => {
+      this._ptrs.delete(e.pointerId);
+      if (this._ptrs.size < 2) this._pinch = null;
+      if (!this._ptrs.size) cv.classList.remove("dragging");
+    };
+    cv.addEventListener("pointerup", release);
+    cv.addEventListener("pointercancel", release);
+    cv.addEventListener("dblclick", () => this.resetZoom());
+  }
+
+  pinchState(){
+    const xs = [...this._ptrs.values()];
+    return {dist: Math.abs(xs[0] - xs[1]), mid: (xs[0] + xs[1]) / 2};
+  }
+
+  /* clientX -> 0..1 position across the plot area */
+  fracAt(clientX){
+    const rect = this.cv.getBoundingClientRect();
+    const plotW = Math.max(1, this.cv.clientWidth - this.padL - this.padR);
+    const f = (clientX - rect.left - this.padL) / plotW;
+    return Math.min(1, Math.max(0, f));
+  }
+
+  /* factor > 1 widens the window (zoom out) */
+  zoomAt(frac, factor){
+    if (!this._full) return;
+    const [f0, f1] = this._full;
+    const [t0, t1] = this.view || this._full;
+    const fullSpan = Math.max(f1 - f0, MIN_ZOOM_SPAN_MS);
+    const span = t1 - t0;
+    const anchor = t0 + frac * span;
+    const nspan = Math.min(Math.max(span * factor, MIN_ZOOM_SPAN_MS), fullSpan);
+    const n0 = anchor - frac * nspan;
+    this.view = [n0, n0 + nspan];
+    this.draw(this._rows || []);
+  }
+
+  panPx(dxPx){
+    if (!this._full || !this.view) return;   // nothing to pan at full extent
+    const [t0, t1] = this.view;
+    const plotW = Math.max(1, this.cv.clientWidth - this.padL - this.padR);
+    const dt = -dxPx / plotW * (t1 - t0);
+    this.view = [t0 + dt, t1 + dt];
+    this.draw(this._rows || []);
+  }
+
+  resetZoom(){
+    this.view = null;
+    this.draw(this._rows || []);
   }
   draw(rows){
     this._rows = rows;
@@ -518,17 +816,40 @@ class MiniChart {
       g.fillStyle = "#8a8a8a";
       g.textAlign = "center";
       g.fillText("no data in range", (x0+x1)/2, (y0+y1)/2);
+      this._full = null; this.view = null;
+      if (this.onView) this.onView(false);
       return;
     }
-    const t0 = rows[0].t.getTime(), t1 = rows[rows.length-1].t.getTime();
+
+    // full extent of the data, then the (optionally zoomed) visible window
+    const f0 = rows[0].t.getTime(), f1 = rows[rows.length-1].t.getTime();
+    this._full = [f0, f1];
+    const fullSpan = Math.max(f1 - f0, 1);
+    let t0 = f0, t1 = f1;
+    if (this.view){
+      const span = Math.min(Math.max(this.view[1] - this.view[0], MIN_ZOOM_SPAN_MS), fullSpan);
+      t0 = Math.min(Math.max(this.view[0], f0), f1 - span);
+      t1 = t0 + span;
+      // panned/zoomed back out to the whole window => drop the zoom entirely
+      this.view = (span >= fullSpan) ? null : [t0, t1];
+      if (!this.view){ t0 = f0; t1 = f1; }
+    }
     const tspan = Math.max(t1 - t0, 1);
     const X = t => x0 + (t - t0) / tspan * (x1 - x0);
 
-    // per-axis min/max
+    // rows inside the window drive the y-scale; one point either side is kept
+    // so lines entering and leaving the view stay connected (then clipped).
+    let i0 = 0, i1 = rows.length - 1;
+    while (i0 < rows.length && rows[i0].t.getTime() < t0) i0++;
+    while (i1 >= 0 && rows[i1].t.getTime() > t1) i1--;
+    const scaleRows = i1 >= i0 ? rows.slice(i0, i1 + 1) : [];
+    const drawRows  = rows.slice(Math.max(0, i0 - 1), Math.min(rows.length, i1 + 2));
+
+    // per-axis min/max (over the visible window only)
     const ax = {L:{min:Infinity,max:-Infinity,used:false}, R:{min:Infinity,max:-Infinity,used:false}};
     for (const s of this.series){
-      const a = ax[s.axis||"L"]; 
-      for (const r of rows){
+      const a = ax[s.axis||"L"];
+      for (const r of scaleRows){
         const v = SVAL(s, r);
         if (isFinite(v)){ a.used = true; if(v<a.min)a.min=v; if(v>a.max)a.max=v; }
       }
@@ -582,13 +903,16 @@ if (dataMin >= 0 && a.min < 0) a.min = 0;  // non-negative data never below zero
       g.fillText(lbl, X(t0 + i/nX*tspan), y1 + 6);
     }
 
-    // series
+    // series — clipped to the plot area so a zoomed view can't spill over
+    // the axis labels while drawing its off-screen anchor points.
+    g.save();
+    g.beginPath(); g.rect(x0, y0, x1 - x0, y1 - y0); g.clip();
     for (const s of this.series){
       const axis = s.axis || "L";
       if (s.kind === "bar"){
-        const bw = Math.max(1, (x1-x0)/Math.max(rows.length,1) * 0.7);
+        const bw = Math.max(1, (x1-x0)/Math.max(drawRows.length,1) * 0.7);
         g.fillStyle = s.color;
-        for (const r of rows){
+        for (const r of drawRows){
           const v = SVAL(s, r);
           if (!isFinite(v) || v <= 0) continue;
           const px = X(r.t.getTime()), py = Y(v, axis), pb = Y(Math.max(ax[axis].min,0), axis);
@@ -600,7 +924,7 @@ if (dataMin >= 0 && a.min < 0) a.min = 0;  // non-negative data never below zero
       if (s.fill){
         g.beginPath();
         let started = false, lastX = null;
-        for (const r of rows){
+        for (const r of drawRows){
           const v = SVAL(s, r);
           if (!isFinite(v)) continue;
           const px = X(r.t.getTime()), py = Y(v, axis);
@@ -619,7 +943,7 @@ if (dataMin >= 0 && a.min < 0) a.min = 0;  // non-negative data never below zero
       g.lineJoin = "round"; g.lineCap = "round";
       g.beginPath();
       let pen = false;
-      for (const r of rows){
+      for (const r of drawRows){
         const v = SVAL(s, r);
         if (!isFinite(v)){ pen = false; continue; }
         const px = X(r.t.getTime()), py = Y(v, axis);
@@ -627,7 +951,26 @@ if (dataMin >= 0 && a.min < 0) a.min = 0;  // non-negative data never below zero
       }
       g.stroke();
     }
+    g.restore();
+
+    if (this.onView) this.onView(!!this.view);
   }
+  /* Adds a "zoomed / Reset" control to a panel header, linked to this chart. */
+  attachZoomBar(panel, header){
+    const z = document.createElement("span");
+    z.className = "zoom";
+    const lbl = document.createElement("span");
+    lbl.textContent = "zoomed";
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = "Reset";
+    b.onclick = () => this.resetZoom();
+    z.appendChild(lbl); z.appendChild(b);
+    header.appendChild(z);
+    this.onView = (zoomed) => panel.classList.toggle("zoomed", zoomed);
+    return this;
+  }
+
   tickFmt(v){
     const a = Math.abs(v);
     if (a >= 1000) return v.toFixed(0);
@@ -656,6 +999,8 @@ const UI = {
         this.activeRange = r;
         wrap.querySelectorAll("button").forEach(x => x.classList.remove("active"));
         b.classList.add("active");
+        // a new time window invalidates any per-chart zoom
+        for (const c of this.charts) c.view = null;
         this.redrawCharts();
       };
       wrap.appendChild(b);
@@ -709,7 +1054,9 @@ const UI = {
       const cv = document.createElement("canvas");
       panel.appendChild(h); panel.appendChild(cv);
       host.appendChild(panel);
-      this.charts.push(new MiniChart(cv, d.series.filter(s => Store.roles[s.role] !== undefined)));
+      const chart = new MiniChart(cv, d.series.filter(s => Store.roles[s.role] !== undefined));
+      chart.attachZoomBar(panel, h);
+      this.charts.push(chart);
     }
   },
 
@@ -733,39 +1080,95 @@ const UI = {
   buildCards(){
     const c = el("cards");
     c.innerHTML = "";
-    const mk = (id, label) => {
+    /* Turn a tile into a link to that parameter's history table. Only
+       parameters the station actually reports become clickable. */
+    const link = (d, paramId) => {
+      const view = PARAM_VIEWS[paramId];
+      if (!d || !view || !view.cols.some(col => Store.roles[col.role] !== undefined)) return d;
+      d.classList.add("linked");
+      d.setAttribute("role", "button");
+      d.setAttribute("tabindex", "0");
+      d.setAttribute("aria-label", view.label + " — open history table");
+      const hint = document.createElement("div");
+      hint.className = "drill";
+      hint.textContent = "View history →";
+      (d.querySelector(".windtxt") || d).appendChild(hint);
+      d.addEventListener("click", () => Drill.open(paramId));
+      d.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " "){ e.preventDefault(); Drill.open(paramId); }
+      });
+      return d;
+    };
+
+    /* Footer rows for a tile. `cap` names what the numbers are; `rows` is
+       [[label, value-class], ...] and defaults to today/yesterday. */
+    const statsBlock = (cap, rows) =>
+      '<div class="stats">' +
+        '<div class="st cap"><span class="sl"></span><span class="sv">' + cap + '</span></div>' +
+        (rows || [["Today","sv-today"], ["Yest","sv-yest"]]).map(([l, cls]) =>
+          '<div class="st"><span class="sl">'+l+'</span>' +
+          '<span class="sv '+cls+'">--</span></div>').join("") +
+      '</div>';
+
+    const mk = (id, label, cap, rows) => {
       const d = document.createElement("div");
-      d.className = "card"; d.id = "card-" + id;
+      d.className = "card" + (cap ? " has-stats" : ""); d.id = "card-" + id;
       d.innerHTML = '<div class="label">'+label+'</div>' +
         '<div class="value"><span class="v">--</span><span class="unit"></span></div>' +
-        '<div class="detail"></div>';
+        '<div class="detail"></div>' + (cap ? statsBlock(cap, rows) : "");
       c.appendChild(d);
       return d;
     };
-    if (Store.roles.airTemp !== undefined) mk("airTemp", ROLE_LABELS.airTemp);
-    if (Store.roles.rh      !== undefined) mk("rh", ROLE_LABELS.rh);
-    if (Store.roles.wsAvg   !== undefined || Store.roles.windDir !== undefined){
+    if (Store.roles.airTemp !== undefined)
+      link(mk("airTemp", ROLE_LABELS.airTemp, "min / max"), "airTemp");
+    if (Store.roles.rh !== undefined)
+      link(mk("rh", ROLE_LABELS.rh, "min / max"), "rh");
+    if (Store.roles.wsAvg !== undefined || Store.roles.windDir !== undefined){
       const d = document.createElement("div");
-      d.className = "card wind"; d.id = "card-wind";
+      d.className = "card wind has-stats"; d.id = "card-wind";
+      // peak is the gust channel when the station reports one
+      const cap = Store.roles.wsMax !== undefined ? "gust / avg" : "max / avg";
       d.innerHTML = this.compassSVG() +
         '<div class="windtxt"><div class="label">Wind</div>' +
         '<div class="value"><span class="v">--</span><span class="unit"></span></div>' +
-        '<div class="detail"></div></div>';
+        '<div class="detail"></div>' + statsBlock(cap) + '</div>';
       c.appendChild(d);
+      link(d, "wind");
     }
-    if (Store.roles.solar !== undefined) mk("solar", ROLE_LABELS.solar);
-    if (Store.roles.rain  !== undefined) mk("rain", "Rain (24 h)");
+    if (Store.roles.solar !== undefined)
+      link(mk("solar", ROLE_LABELS.solar, "max / avg"), "solar");
+
+    /* One precipitation tile: live calendar-day total from the buffer on top,
+       longer KV-backed totals underneath. */
     if (Store.roles.rain !== undefined){
       const pc = document.createElement("div");
       pc.className = "card precip"; pc.id = "card-precip";
-      pc.innerHTML = '<div class="label">Precipitation Totals</div>' +
+      pc.innerHTML = '<div class="label">Precipitation</div>' +
+        '<div class="value"><span class="v">--</span><span class="unit"></span></div>' +
+        '<div class="detail"></div>' +
         '<div class="precip-rows">' +
-        ["Today","Yesterday","7 Days","Month","Year"].map(l =>
+        ["Yesterday","7 Days","Month","Year"].map(l =>
           '<div class="pr"><div class="pv">--</div><div class="pl">'+l+'</div></div>').join("") +
         '</div><div class="detail" id="precip-asof"></div>';
       c.appendChild(pc);
+      link(pc, "rain");
     }
-    if (Store.roles.battV !== undefined) mk("battV", ROLE_LABELS.battV);
+    if (Store.roles.battV !== undefined)
+      link(mk("battV", ROLE_LABELS.battV, "&lt;" + BATT_DIP_V + " V &middot; 24 h",
+              [["Count","sv-count"]]), "battV");
+  },
+
+  /* Fills one footer row by its value-class. */
+  setStat(id, cls, txt){
+    const card = el("card-" + id);
+    if (!card) return;
+    const n = card.querySelector("." + cls);
+    if (n) n.textContent = txt;
+  },
+  /* Fills a tile's today/yesterday rows. */
+  setStats(id, todayTxt, yestTxt){
+    this.setStat(id, "sv-today", todayTxt);
+    this.setStat(id, "sv-yest", yestTxt);
   },
 
   setCard(id, val, units, detail, dp){
@@ -781,18 +1184,19 @@ const UI = {
   updateCards(){
     const last = Store.latest();
     if (!last) return;
-    const rows24 = Store.windowRows(24);
 
-    // temp: 24h hi/lo
+    // one pass for every tile that shows today/yesterday figures
+    const st = dayStats(["airTemp","rh","wsAvg","wsMax","solar","rain"]);
+    const today = st[0], yest = st[1];
+
     if (Store.roles.airTemp !== undefined){
-      const vs = rows24.map(r => Store.roleVal(r,"airTemp")).filter(isFinite);
-      const hi = vs.length ? Math.max.apply(null, vs) : NaN;
-      const lo = vs.length ? Math.min.apply(null, vs) : NaN;
-      this.setCard("airTemp", Store.roleVal(last,"airTemp"), Store.roleUnits("airTemp"),
-        isFinite(hi) ? "24 h: " + fmt(lo,1) + " / " + fmt(hi,1) : "", 1);
+      this.setCard("airTemp", Store.roleVal(last,"airTemp"), Store.roleUnits("airTemp"), "", 1);
+      this.setStats("airTemp", pairMinMax(today.airTemp, 1), pairMinMax(yest.airTemp, 1));
     }
-    if (Store.roles.rh !== undefined)
+    if (Store.roles.rh !== undefined){
       this.setCard("rh", Store.roleVal(last,"rh"), Store.roleUnits("rh") || "%", "", 0);
+      this.setStats("rh", pairMinMax(today.rh, 0), pairMinMax(yest.rh, 0));
+    }
 
     // wind card + compass
     const wc = el("card-wind");
@@ -809,23 +1213,42 @@ const UI = {
       wc.querySelector(".detail").textContent = det;
       const needle = document.getElementById("compass-needle");
       if (needle && isFinite(wd)) needle.setAttribute("transform", "rotate(" + (wd%360) + " 50 50)");
+
+      // peak comes from the gust channel when present, average always from wsAvg
+      const windPair = (d) => {
+        const peak = (d.wsMax && d.wsMax.n) ? d.wsMax.max
+                   : (d.wsAvg && d.wsAvg.n) ? d.wsAvg.max : NaN;
+        const mean = (d.wsAvg && d.wsAvg.n) ? d.wsAvg.avg : NaN;
+        if (!isFinite(peak) && !isFinite(mean)) return "--";
+        return (isFinite(peak) ? fmt(peak,1) : "--") + " / " +
+               (isFinite(mean) ? fmt(mean,1) : "--");
+      };
+      this.setStats("wind", windPair(today), windPair(yest));
     }
 
-    if (Store.roles.solar !== undefined)
+    if (Store.roles.solar !== undefined){
       this.setCard("solar", Store.roleVal(last,"solar"), Store.roleUnits("solar") || "W/m\u00B2", "", 0);
+      this.setStats("solar", pairMaxAvg(today.solar, 0), pairMaxAvg(yest.solar, 0));
+    }
 
+    // headline precip = today's calendar-day total, live from the buffer
     if (Store.roles.rain !== undefined){
-      const tot = rows24.map(r => Store.roleVal(r,"rain")).filter(isFinite).reduce((a,b)=>a+b, 0);
-      this.setCard("rain", tot, Store.roleUnits("rain"),
+      this.setCard("precip", today.rain.n ? today.rain.sum : NaN, Store.roleUnits("rain"),
         "last interval: " + fmt(Store.roleVal(last,"rain"), 2), 2);
+      this._rainYesterday = yest.rain.n ? yest.rain.sum : null;   // fallback for the KV row
     }
     if (Store.roles.battV !== undefined){
       const bv = Store.roleVal(last,"battV");
-      this.setCard("battV", bv, Store.roleUnits("battV") || "V",
-        isFinite(bv) && bv < 11.5 ? "\u26A0 low" : "", 2);
+      const low = isFinite(bv) && bv < BATT_LOW_V;
+      const count = countBelow("battV", 24, BATT_DIP_V);
+      this.setCard("battV", bv, Store.roleUnits("battV") || "V", low ? "\u26A0 low" : "", 2);
+      this.setStat("battV", "sv-count", String(count));
+      // always reassign, so the tile recovers its normal colour once the
+      // battery does \u2014 previously it stayed red until the next rebuild
       const card = el("card-battV");
-      if (card && isFinite(bv) && bv < 11.5)
-        card.style.borderTopColor = "var(--wwg-critical-rust)";
+      if (card) card.style.borderTopColor =
+        low   ? "var(--wwg-critical-rust)" :
+        count ? "var(--wwg-elevated-amber)" : "";
     }
 
     // observation age + status pill
@@ -839,34 +1262,10 @@ const UI = {
     else { pill.classList.add("off"); txt.textContent = "NO RECENT DATA"; }
   },
 
-  buildTableHead(){
-    const thead = el("tbl").querySelector("thead");
-    let h = "<tr><th>Timestamp</th><th>Rec&nbsp;#</th>";
-    for (const f of Store.fields){
-      h += "<th>" + f.name + (f.units ? '<span class="u">' + f.units + "</span>" : "") + "</th>";
-    }
-    thead.innerHTML = h + "</tr>";
-  },
-
-  updateTable(){
-    const tbody = el("tbl").querySelector("tbody");
-    const rows = Store.rows.slice(-CONFIG.tableRows).reverse();
-    let h = "";
-    for (const r of rows){
-      h += '<tr><td class="time">' + fmtClock(r.t) + "</td><td>" + r.no + "</td>";
-      for (const v of r.vals){
-        const bad = !isFinite(v);
-        h += '<td class="' + (bad ? "nan" : "") + '">' + fmt(v) + "</td>";
-      }
-      h += "</tr>";
-    }
-    tbody.innerHTML = h;
-  },
-
   refreshAll(){
     this.updateCards();
     this.redrawCharts();
-    this.updateTable();
+    if (Drill.param) Drill.render(false);   // keep an open table live
     el("nl-buf").textContent = Store.rows.length;
   },
 
@@ -879,8 +1278,168 @@ const UI = {
 };
 
 /* ============================================================================
+   Parameter history table — opened by clicking a current-conditions tile.
+   Deep-linkable as #param=<id>, so a view can be shared or reached with the
+   browser's back/forward buttons.
+   ========================================================================= */
+const PARAM_VIEWS = {
+  airTemp: {label:"Air Temperature", cols:[{role:"airTemp", label:"Air Temp", dp:1}]},
+  rh:      {label:"Relative Humidity", cols:[{role:"rh", label:"RH", dp:0}]},
+  wind:    {label:"Wind", cols:[
+             {role:"wsAvg",   label:"Speed",     dp:1},
+             {role:"wsMax",   label:"Gust",      dp:1},
+             {role:"windDir", label:"Direction", dp:0}]},
+  solar:   {label:"Solar Radiation", cols:[{role:"solar", label:"Solar", dp:0}]},
+  rain:    {label:"Rain", cols:[{role:"rain", label:"Rain", dp:2}]},
+  battV:   {label:"Battery", cols:[{role:"battV", label:"Battery", dp:2}]}
+};
+
+const Drill = {
+  param: null,      // null = closed
+  range: null,      // RANGES entry; defaults to whatever the charts are showing
+  showAll: false,
+
+  cols(){
+    return PARAM_VIEWS[this.param].cols.filter(c => Store.roles[c.role] !== undefined);
+  },
+
+  /* user gesture: push a history entry so Back closes the table */
+  open(id){
+    if (!PARAM_VIEWS[id]) return;
+    if (location.hash !== "#param=" + id)
+      history.pushState({param:id}, "", "#param=" + id);
+    this.show(id);
+  },
+
+  show(id){
+    if (!PARAM_VIEWS[id] || !Store.fields.length) return;
+    this.param = id;
+    this.showAll = false;
+    if (!this.range) this.range = UI.activeRange;
+    el("drill-title").textContent = PARAM_VIEWS[id].label;
+    this.buildRanges();
+    this.render(true);
+    el("drill").classList.add("open");
+    document.body.style.overflow = "hidden";
+    el("drill-close").focus();
+  },
+
+  close(push){
+    if (!this.param) return;
+    this.param = null;
+    el("drill").classList.remove("open");
+    document.body.style.overflow = "";
+    if (push !== false && location.hash)
+      history.pushState({}, "", location.pathname + location.search);
+  },
+
+  buildRanges(){
+    const wrap = el("drill-ranges");
+    wrap.innerHTML = "";
+    for (const r of RANGES){
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = r.label;
+      if (r === this.range) b.classList.add("active");
+      b.onclick = () => {
+        this.range = r;
+        this.showAll = false;
+        wrap.querySelectorAll("button").forEach(x => x.classList.remove("active"));
+        b.classList.add("active");
+        this.render(true);
+      };
+      wrap.appendChild(b);
+    }
+  },
+
+  render(resetScroll){
+    if (!this.param) return;
+    const cols = this.cols();
+    const body = el("drill-body");
+    const keepScroll = body.scrollTop;
+    const tbl = el("drill-tbl");
+
+    tbl.querySelector("thead").innerHTML =
+      "<tr><th>Timestamp</th><th>Rec&nbsp;#</th>" +
+      cols.map(c => {
+        const u = Store.roleUnits(c.role);
+        return "<th>" + c.label + (u ? '<span class="u">' + u + "</span>" : "") + "</th>";
+      }).join("") + "</tr>";
+
+    const all = Store.windowRows(this.range.hours).slice().reverse();  // newest first
+    const shown = this.showAll ? all : all.slice(0, CONFIG.drillRows);
+
+    let h = "";
+    for (const r of shown){
+      h += '<tr><td class="time">' + fmtClock(r.t) + "</td><td>" + r.no + "</td>";
+      for (const c of cols){
+        const v = Store.roleVal(r, c.role);
+        const bad = !isFinite(v);
+        let cell = bad ? "NAN" : fmt(v, c.dp);
+        if (!bad && c.role === "windDir") cell += " " + degToCompass(v);
+        h += '<td class="' + (bad ? "nan" : "") + '">' + cell + "</td>";
+      }
+      h += "</tr>";
+    }
+    tbl.querySelector("tbody").innerHTML = h ||
+      '<tr><td class="empty" colspan="' + (cols.length + 2) + '">no records in this range</td></tr>';
+
+    const note = el("drill-note");
+    note.innerHTML = "";
+    const txt = document.createElement("span");
+    txt.textContent = all.length
+      ? "showing " + shown.length.toLocaleString() + " of " +
+        all.length.toLocaleString() + " records · newest first"
+      : "no records buffered for this range yet";
+    note.appendChild(txt);
+    if (shown.length < all.length){
+      const more = document.createElement("button");
+      more.type = "button";
+      more.textContent = "Show all " + all.length.toLocaleString();
+      more.onclick = () => { this.showAll = true; this.render(false); };
+      note.appendChild(more);
+    }
+
+    body.scrollTop = resetScroll ? 0 : keepScroll;
+  },
+
+  csv(){
+    if (!this.param) return;
+    const cols = this.cols();
+    const head = ["TIMESTAMP","RECORD"].concat(cols.map(c => {
+      const u = Store.roleUnits(c.role);
+      return '"' + c.label + (u ? " (" + u + ")" : "") + '"';
+    }));
+    const lines = [head.join(",")];
+    for (const r of Store.windowRows(this.range.hours)){
+      lines.push(['"' + r.t.toISOString() + '"', r.no].concat(
+        cols.map(c => { const v = Store.roleVal(r, c.role); return isFinite(v) ? v : '"NAN"'; })
+      ).join(","));
+    }
+    saveCSV(lines.join("\r\n"),
+      (Store.stationName || CONFIG.station || "station") + "-" + this.param + ".csv");
+  }
+};
+
+/* Open/close purely from the URL — covers deep links and Back/Forward. */
+function syncDrillFromHash(){
+  const m = /^#param=([A-Za-z0-9_]+)$/.exec(location.hash || "");
+  if (m && PARAM_VIEWS[m[1]]) Drill.show(m[1]);
+  else Drill.close(false);
+}
+
+/* ============================================================================
    CSV export
    ========================================================================= */
+function saveCSV(text, filename){
+  const blob = new Blob([text], {type:"text/csv"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 function downloadCSV(){
   const head = ["TIMESTAMP","RECORD"].concat(Store.fields.map(f => '"' + f.name + '"'));
   const lines = [head.join(",")];
@@ -888,12 +1447,8 @@ function downloadCSV(){
     lines.push(['"' + r.t.toISOString() + '"', r.no]
       .concat(r.vals.map(v => isFinite(v) ? v : '"NAN"')).join(","));
   }
-  const blob = new Blob([lines.join("\r\n")], {type:"text/csv"});
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = (Store.stationName || CONFIG.station || "station") + ".csv";
-  a.click();
-  URL.revokeObjectURL(a.href);
+  saveCSV(lines.join("\r\n"),
+    (Store.stationName || CONFIG.station || "station") + ".csv");
 }
 
 /* ============================================================================
@@ -941,9 +1496,9 @@ async function initialLoad(){
     setStationHeader();
     UI.buildCards();
     UI.buildCharts();
-    UI.buildTableHead();
     Store.merge(probe.data);
     UI.refreshAll();
+    syncDrillFromHash();   // honour a #param= deep link now that fields exist
 
     // 2) backfill the history window
     const n = Math.ceil(CONFIG.historyDays * 86400 / CONFIG.scanIntervalSec) + 2;
@@ -977,7 +1532,7 @@ async function poll(){
         res.head.fields.length !== Store.fields.length){
       // table definition changed (recompile) — rebuild UI
       Store.setHead(res.head);
-      UI.buildCards(); UI.buildCharts(); UI.buildTableHead();
+      UI.buildCards(); UI.buildCharts();
     }
     const added = Store.merge(res.data || []);
     if (added) UI.refreshAll(); else UI.updateCards(); // age/status still tick
@@ -1017,12 +1572,29 @@ el("btn-pause").onclick = function(){
 };
 el("btn-csv").onclick = downloadCSV;
 
+/* parameter history overlay */
+el("drill-close").onclick = () => Drill.close();
+el("drill-csv").onclick   = () => Drill.csv();
+el("drill").addEventListener("click", (e) => {
+  if (e.target === el("drill")) Drill.close();   // backdrop click
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && Drill.param) Drill.close();
+});
+window.addEventListener("popstate", syncDrillFromHash);
+window.addEventListener("hashchange", syncDrillFromHash);
+
 async function loadPrecipSummary(){
   if (!el("card-precip")) return;
   try{
     const r = await DataSource.fetchJson(CONFIG.apiBase + "/precip?station=" +
       encodeURIComponent(CONFIG.station));
-    const vals = [r.today, r.yesterday, r.week, r.month, r.ytd];
+    // "today" is the tile's headline (computed live from the buffer), so the
+    // KV-backed rows start at yesterday. Fall back to the buffer's own
+    // yesterday total if KV hasn't got that day yet.
+    const yest = (r.yesterday === null || r.yesterday === undefined)
+      ? UI._rainYesterday : r.yesterday;
+    const vals = [yest, r.week, r.month, r.ytd];
     el("card-precip").querySelectorAll(".pv").forEach((v, i) => {
       v.textContent = (vals[i] === null || vals[i] === undefined)
         ? "--" : vals[i].toFixed(2) + (r.units ? " " + r.units : "");
@@ -1072,7 +1644,7 @@ async function loadStreamGauges(){
       new MiniChart(cv, [
         {get: r => r.stage, color:"#00669A", kind:"line", axis:"L", fill:true},
         {get: r => r.flow,  color:"#238F95", kind:"line", axis:"R"}
-      ]).draw(rows);
+      ]).attachZoomBar(panel, h).draw(rows);
     }
   }catch(e){ /* leave section hidden */ }
 }
