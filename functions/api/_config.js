@@ -33,6 +33,10 @@ export const STATIONS = [
     { key: "Precip", convert: "mm2in" },
     { key: "BatVoltMin", units: "V" },
   ],
+  streamGauges: [
+    { id: "USGS-01632082", label: "Linville Creek at Broadway" },
+    { id: "USGS-01632000", label: "N F Shenandoah River at Cootes Store" },
+  ],
 },
 ];
 
