@@ -1,9 +1,13 @@
 /* GET /api/stream?station=<id>
  *
  * USGS stream-gauge data for the gauges configured on a station:
- *   { gauges: [ { id, label, asOf,
+ *   { catalog: [ { id, label } ],            // every configured gauge
+ *     gauges:  [ { id, label, asOf,
  *                 stage: {unit, t:[epochSec], v:[num]},
  *                 flow:  {unit, t:[epochSec], v:[num]} } ] }
+ *
+ * ?gauge=<id> selects one gauge (default: the first configured one);
+ * ?gauge=all returns them all.
  *
  * Source: the modernized USGS Water Data APIs (OGC API - Features),
  * collection "continuous" — the legacy waterservices.usgs.gov family is
@@ -61,8 +65,26 @@ export async function onRequestGet(context) {
   const url = new URL(request.url);
   const station = getStation(url.searchParams.get("station") || "");
   if (!station) return errorResponse("unknown station", 404);
-  const gauges = station.streamGauges || [];
-  if (!gauges.length) return jsonResponse({ gauges: [] }, 200, 3600);
+  const all = station.streamGauges || [];
+  if (!all.length) return jsonResponse({ gauges: [], catalog: [] }, 200, 3600);
+
+  /* The front end shows one gauge at a time, so fetch one at a time: the
+     catalog (id + label for every configured gauge) always ships, but the
+     series come back only for the requested gauge. No `gauge` param = the
+     first configured one; `gauge=all` keeps the old every-gauge behaviour.
+     Each variant caches under its own URL. */
+  const wanted = url.searchParams.get("gauge");
+  const catalog = all.map((g) => ({ id: g.id, label: g.label || g.id }));
+  let gauges;
+  if (wanted === "all") {
+    gauges = all;
+  } else if (wanted) {
+    const g = all.find((x) => x.id === wanted);
+    if (!g) return errorResponse("unknown gauge", 404);
+    gauges = [g];
+  } else {
+    gauges = all.slice(0, 1);
+  }
 
   const ttl = parseInt(env.STREAM_TTL_SEC || "600", 10);
   const cache = typeof caches !== "undefined" ? caches.default : null;
@@ -88,7 +110,7 @@ export async function onRequestGet(context) {
       );
       out.push({ id: g.id, label: g.label || g.id, asOf: newest, stage, flow });
     }
-    const resp = jsonResponse({ gauges: out }, 200, ttl);
+    const resp = jsonResponse({ gauges: out, catalog }, 200, ttl);
     if (cache) context.waitUntil(cache.put(cacheKey, resp.clone()));
     return resp;
   } catch (e) {

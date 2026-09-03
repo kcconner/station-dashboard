@@ -107,11 +107,22 @@ optional env USGS_API_KEY -> X-Api-Key.
 - USGS values arrive as strings; times RFC3339; responses unsorted — proxy
   sorts ascending and drops unparseable points.
 - Configured gauges: USGS-01632082 Linville Creek at Broadway,
-  USGS-01632000 N F Shenandoah River at Cootes Store. (Beware: 01632900 is
-  Smith Creek near New Market, NOT Linville Creek.)
-- Front end: fixed 7-day dual-axis panels (stage L filled, flow R), section
-  hidden if no gauges report. Keep the "USGS provisional data" note —
-  their terms ask for it.
+  USGS-01632000 N F Shenandoah River at Cootes Store, USGS-01636500
+  Shenandoah River at Millville WV, USGS-01636464 Bullskin Run below
+  Kabletown WV. (Beware: 01632900 is Smith Creek near New Market, NOT
+  Linville Creek; and 01636460 is Bullskin Run ABOVE Kabletown.)
+- ONE GAUGE PER REQUEST. `?gauge=<id>` picks one, no param gives the first
+  configured one, `?gauge=all` restores the old every-gauge response. Every
+  response carries `catalog: [{id,label}]` for all configured gauges — that
+  is what fills the picker, so the browser gets a 4-item menu without
+  pulling 4 gauges' worth of series. Each variant caches under its own URL.
+- Front end: a `<select>` in the section header (hidden when only one gauge
+  is configured) chooses the gauge; a fixed 7-day dual-axis panel (stage L
+  filled, flow R) is drawn for it. The selection is mirrored in the query
+  string as `?gauge=`, survives the 15-min refresh, and falls back to the
+  default once if a stale id 404s. Section hides only when the catalog is
+  empty; a configured-but-silent gauge gets a "No recent data" note instead.
+  Keep the "USGS provisional data" note — their terms ask for it.
 
 ## Front end conventions
 
@@ -143,6 +154,16 @@ optional env USGS_API_KEY -> X-Api-Key.
   reading the local date — DST-safe because timestamps are already local.
   Keep this in step with `dayOf()` server-side or the tiles and the KV totals
   will disagree by one record.
+- Air-temperature tile: the label is the full "Air Temperature", and the
+  detail line under the reading is the apparent temperature —
+  `feelsLikeF()` implements the NWS Rothfusz heat index (>= 80 °F, with the
+  dry-air and muggy-air corrections) and the 2001 wind chill (<= 50 °F,
+  wind > 3 mph). It works in °F internally and converts back through the
+  field's own units, so a °C station still gets the right answer. The line
+  is suppressed unless the result is at least a degree HOTTER (heat) or
+  COLDER (chill) than the thermometer — near the 80/50 °F edges the
+  formulas otherwise print a "feels like" that is not different, or points
+  the wrong way. Nothing is stored: it is computed from the latest record.
 - Battery tile: `BATT_LOW_V` (11.5) flags the current reading, `BATT_DIP_V`
   (12) is the level whose 24 h excursions are counted. The count is
   EXCURSIONS, not readings — a continuous run below the line counts once, and
@@ -214,10 +235,13 @@ The front-end suite IS in the repo and takes no arguments:
 
     node tests/frontend.test.js
 
-73 assertions, exits non-zero on failure. It covers role auto-detection,
+102 assertions, exits non-zero on failure. It covers role auto-detection,
 tile linking, #param deep links and Back, history-table row capping, chart
 zoom/pan clamping, wheel/drag/pinch/double-click gestures, day-boundary
-attribution and the battery excursion count. Run it after touching
+attribution, the battery excursion count, the heat-index/wind-chill maths
+against the NWS tables, and the stream-gauge picker (catalog -> options,
+selection reaching the endpoint and the URL, surviving a refresh, silent
+gauge, no gauges). Run it after touching
 public/index.html — it is the only thing standing between a typo and a
 broken dashboard, since there is no build step to catch anything.
 
@@ -227,7 +251,11 @@ package.json and no test runner; tests are plain Node scripts, run directly.
 Two DOM-stub requirements that are easy to get wrong (both documented in the
 test header): `document.createTextNode` is needed as well as `createElement`,
 and `getElementById` must resolve cards created at runtime — otherwise every
-tile assertion reads through a null card and silently PASSES.
+tile assertion reads through a null card and silently PASSES. The gauge
+picker added three more: FakeEl needs `value`/`hidden`/`dataset`, `location`
+needs an `href` and `history.replaceState`, and `global.URL` must extend
+Node's real URL (setGaugeParam parses `location.href`) rather than replace it
+with the object-URL stub.
 
 ## Known state / open items (Aug 28, 2026)
 
@@ -246,7 +274,14 @@ tile assertion reads through a null card and silently PASSES.
 - The history overlay does not trap focus — Tab can walk into the page
   behind it. Escape and the close button work, so it is usable, but it is
   not a fully compliant modal.
-- Ideas parked: dew point card (DewPoint is already queried and lands in the
+- Sep 3, 2026: air-temperature tile renamed and given a feels-like line; the
+  two WV gauges (Millville, Bullskin Run) added behind a gauge picker.
+  Bullskin Run is a small stream — confirm it actually returns 00060 flow as
+  well as 00065 stage once it is live; the panel degrades to stage only if
+  not.
+- Ideas parked: feels-like as a column in the air-temperature history table
+  (PARAM_VIEWS columns are role-based, so this needs a computed-column hook
+  in Drill), dew point card (DewPoint is already queried and lands in the
   full CSV export, but has no ROLE_PATTERNS entry, so it gets no tile, no
   chart and no history table), multi-station map, wind rose, cumulative rain
   chart, synchronised zoom across charts, 60-min WWG interval if ever added

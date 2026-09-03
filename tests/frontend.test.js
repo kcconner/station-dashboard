@@ -41,6 +41,11 @@ class FakeEl {
     this.textContent = "";
     this.scrollTop = 0;
     this.options = [];
+    /* <select> surface: value/hidden are plain properties in the DOM too, and
+       dataset is how the gauge picker remembers the catalog it built from */
+    this.value = "";
+    this.hidden = false;
+    this.dataset = {};
     this.clientWidth = 600;
     this.clientHeight = 210;
     this._q = new Map();
@@ -99,7 +104,7 @@ class FakeEl {
 
 const byId = new Map();
 for (const id of ["station-name","station-sub","station-sel","status-pill","status-txt",
-                  "cards","charts","range-btns","stream-head","stream-charts","btn-pause",
+                  "cards","charts","range-btns","stream-head","stream-charts","stream-select","btn-pause",
                   "btn-csv","err-banner","nl-src","nl-buf","nl-poll","nl-next","obs-age",
                   "drill","drill-title","drill-close","drill-csv","drill-ranges",
                   "drill-body","drill-tbl","drill-note","compass-needle","precip-asof"]){
@@ -121,7 +126,7 @@ global.document = {
 };
 function fireDoc(type, ev){ (docListeners.get(type) || []).forEach(fn => fn(ev)); }
 
-const location = { pathname:"/", search:"", hash:"" };
+const location = { href:"https://dash.test/", pathname:"/", search:"", hash:"" };
 const winListeners = new Map();
 global.window = {
   devicePixelRatio: 1,
@@ -134,13 +139,22 @@ function fireWin(type){ (winListeners.get(type) || []).forEach(fn => fn({})); }
 
 global.location = location;
 global.history = {
+  state: null,
   pushState(state, title, url){
     const u = String(url || "");
     location.hash = u.startsWith("#") ? u : "";
-  }
+  },
+  /* the gauge picker mirrors its selection into the query string */
+  replaceState(state, title, url){ location.href = String(url || location.href); }
 };
 global.ResizeObserver = class { observe(){} disconnect(){} };
-global.URL = { createObjectURL: () => "blob:test", revokeObjectURL(){} };
+/* keep Node's real URL (setGaugeParam parses location.href with it) and just
+   bolt the object-URL statics used by the CSV download onto it */
+const RealURL = URL;
+global.URL = class extends RealURL {
+  static createObjectURL(){ return "blob:test"; }
+  static revokeObjectURL(){}
+};
 global.setInterval = () => 0;              // keep timers from running the poll loop
 global.setTimeout  = () => 0;
 global.clearTimeout = () => {};
@@ -183,9 +197,10 @@ global.fetch = async (u) => {
 /* ------------------------------------------------------------------- run it */
 const api = new Function(SRC +
   "\nreturn {CONFIG,Store,UI,Drill,MiniChart,PARAM_VIEWS,RANGES,syncDrillFromHash," +
-  "dayStats,countBelow,BATT_DIP_V};")();
+  "dayStats,countBelow,BATT_DIP_V,feelsLikeF,feelsLikeText,loadStreamGauges};")();
 const {CONFIG, Store, UI, Drill, PARAM_VIEWS, RANGES, syncDrillFromHash,
-       dayStats, countBelow, BATT_DIP_V} = api;
+       dayStats, countBelow, BATT_DIP_V, feelsLikeF, feelsLikeText,
+       loadStreamGauges} = api;
 
 (async function main(){
   for (let i = 0; i < 50; i++) await Promise.resolve();   // let initialLoad settle
@@ -455,6 +470,125 @@ const {CONFIG, Store, UI, Drill, PARAM_VIEWS, RANGES, syncDrillFromHash,
      "'" + document.getElementById("card-battV").style.borderTopColor + "'");
   ok("zero excursions renders 0", read("card-battV",".sv-count") === "0",
      read("card-battV",".sv-count"));
+
+  /* ---- apparent temperature (heat index / wind chill) ------------------- */
+  console.log("\napparent temperature");
+  // NWS heat-index table: 90 F / 70 % reads about 105 F
+  ok("heat index at 90 F / 70 %", near(feelsLikeF(90, 70, 5).v, 105.4, 1.5),
+     feelsLikeF(90, 70, 5).v);
+  ok("heat index is flagged as heat", feelsLikeF(90, 70, 5).kind === "heat");
+  // dry-air correction pulls it down below the raw regression
+  ok("dry-air correction lowers it", feelsLikeF(95, 10, 5).v < feelsLikeF(95, 14, 5).v,
+     feelsLikeF(95, 10, 5).v + " vs " + feelsLikeF(95, 14, 5).v);
+  // NWS wind-chill table: 20 F with a 20 mph wind reads about 4 F
+  ok("wind chill at 20 F / 20 mph", near(feelsLikeF(20, 50, 20).v, 4.2, 1.5),
+     feelsLikeF(20, 50, 20).v);
+  ok("wind chill is flagged as chill", feelsLikeF(20, 50, 20).kind === "chill");
+  ok("calm air gets no wind chill", feelsLikeF(20, 50, 2).kind === null);
+  ok("mild weather feels like itself",
+     feelsLikeF(65, 50, 8).kind === null && feelsLikeF(65, 50, 8).v === 65);
+  ok("NAN in, NAN out", isNaN(feelsLikeF(NaN, 50, 5).v));
+  ok("no heat index without humidity", feelsLikeF(95, NaN, 5).kind === null);
+
+  console.log("\nfeels-like tile line");
+  const hotRows = (t, rh, ws) => [{
+    t: new Date(), no: Math.floor(Date.now()/60000),
+    vals:[t, rh, ws, ws, 180, 400, 0, 13.2]
+  }];
+  Store.rows = hotRows(95, 55, 5);
+  UI.updateCards();
+  ok("hot day shows a feels-like line",
+     /^feels like 1\d\d/.test(read("card-airTemp",".detail")), read("card-airTemp",".detail"));
+  ok("units come from the field", read("card-airTemp",".detail").indexOf("Deg F") !== -1,
+     read("card-airTemp",".detail"));
+  Store.rows = hotRows(68, 50, 5);
+  UI.updateCards();
+  ok("mild day shows nothing", read("card-airTemp",".detail") === "",
+     "'" + read("card-airTemp",".detail") + "'");
+  Store.rows = hotRows(20, 50, 20);
+  UI.updateCards();
+  ok("cold windy day shows wind chill",
+     read("card-airTemp",".detail").indexOf("feels like 4") === 0, read("card-airTemp",".detail"));
+  ok("no line when the heat index is not above the thermometer",
+     feelsLikeText(81, 30, 3) === "", "'" + feelsLikeText(81, 30, 3) + "'");
+  ok("no line for a barely-there wind chill",
+     feelsLikeText(50, 50, 3.5) === "", "'" + feelsLikeText(50, 50, 3.5) + "'");
+
+  /* ---- stream gauge picker --------------------------------------------- */
+  console.log("\nstream gauge picker");
+  const CATALOG = [
+    {id:"USGS-01632082", label:"Linville Creek at Broadway, VA"},
+    {id:"USGS-01632000", label:"N F Shenandoah River at Cootes Store, VA"},
+    {id:"USGS-01636500", label:"Shenandoah River at Millville, WV"},
+    {id:"USGS-01636464", label:"Bullskin Run below Kabletown, WV"}
+  ];
+  const seriesFor = (id) => {
+    const t = [], v = [];
+    for (let i = 0; i < 8; i++){ t.push(Math.floor(Date.now()/1000) - (8-i)*900); v.push(2 + i*0.1); }
+    return {id, label: CATALOG.find(g => g.id === id).label, asOf: t[t.length-1],
+            stage:{unit:"ft", t, v}, flow:{unit:"ft^3/s", t, v: v.map(x => x*100)}};
+  };
+  let streamURLs = [];
+  const realFetch = global.fetch;
+  global.fetch = async (u) => {
+    if (!u.includes("/stream")) return realFetch(u);
+    streamURLs.push(u);
+    const q = new RealURL(u, "https://dash.test").searchParams.get("gauge");
+    const id = q || CATALOG[0].id;
+    return {ok:true, status:200, statusText:"OK",
+            json: async () => ({catalog: CATALOG, gauges: [seriesFor(id)]})};
+  };
+
+  await loadStreamGauges();
+  const sel = byId.get("stream-select");
+  ok("section is visible", byId.get("stream-head").style.display === "flex");
+  ok("every configured gauge is listed", sel.children.length === 4, sel.children.length);
+  ok("labels reach the options",
+     sel.children[2].textContent === "Shenandoah River at Millville, WV",
+     sel.children[2].textContent);
+  ok("picker is shown when there is a choice", sel.hidden === false);
+  ok("defaults to the first gauge", sel.value === CATALOG[0].id, sel.value);
+  ok("one panel at a time", byId.get("stream-charts").children.length === 1,
+     byId.get("stream-charts").children.length);
+
+  sel.value = "USGS-01636464";
+  streamURLs = [];
+  sel.onchange();                       // the handler isn't async — let it settle
+  for (let i = 0; i < 50; i++) await Promise.resolve();
+  ok("selection is sent to the endpoint",
+     streamURLs.length === 1 && streamURLs[0].indexOf("gauge=USGS-01636464") !== -1,
+     streamURLs[0]);
+  ok("selection lands in the query string",
+     location.href.indexOf("gauge=USGS-01636464") !== -1, location.href);
+  ok("panel follows the selection",
+     byId.get("stream-charts").children[0].children[0].textContent
+       .indexOf("Bullskin Run below Kabletown") === 0,
+     byId.get("stream-charts").children[0].children[0].textContent);
+
+  // the picker survives a background refresh without resetting
+  await loadStreamGauges();
+  ok("refresh keeps the selection", sel.value === "USGS-01636464", sel.value);
+  ok("refresh does not duplicate options", sel.children.length === 4, sel.children.length);
+
+  // a silent gauge says so instead of blanking the section
+  global.fetch = async (u) => u.includes("/stream")
+    ? {ok:true, status:200, statusText:"OK",
+       json: async () => ({catalog: CATALOG, gauges: []})}
+    : realFetch(u);
+  await loadStreamGauges();
+  ok("silent gauge keeps the section up", byId.get("stream-head").style.display === "flex");
+  ok("silent gauge explains itself",
+     byId.get("stream-charts").children[0]._cls.has("stream-msg"),
+     byId.get("stream-charts").children[0].className);
+
+  // a station with no gauges configured hides the section entirely
+  global.fetch = async (u) => u.includes("/stream")
+    ? {ok:true, status:200, statusText:"OK", json: async () => ({catalog: [], gauges: []})}
+    : realFetch(u);
+  await loadStreamGauges();
+  ok("no gauges hides the section", byId.get("stream-head").style.display === "none",
+     byId.get("stream-head").style.display);
+  global.fetch = realFetch;
 
   console.log("\n" + pass + " passed, " + fail + " failed");
   process.exit(fail ? 1 : 0);

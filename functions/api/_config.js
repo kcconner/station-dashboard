@@ -33,9 +33,13 @@ export const STATIONS = [
     { key: "Precip", convert: "mm2in" },
     { key: "BatVoltMin", units: "V" },
   ],
+  /* Order matters: the first entry is what /api/stream returns when the
+     dashboard asks for no particular gauge. */
   streamGauges: [
-    { id: "USGS-01632082", label: "Linville Creek at Broadway" },
-    { id: "USGS-01632000", label: "N F Shenandoah River at Cootes Store" },
+    { id: "USGS-01632082", label: "Linville Creek at Broadway, VA" },
+    { id: "USGS-01632000", label: "N F Shenandoah River at Cootes Store, VA" },
+    { id: "USGS-01636500", label: "Shenandoah River at Millville, WV" },
+    { id: "USGS-01636464", label: "Bullskin Run below Kabletown, WV" },
   ],
 },
 ];

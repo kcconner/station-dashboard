@@ -119,6 +119,22 @@
   .sec-head .rule{flex:1;height:1px;background:var(--wwg-gray-200)}
   .sec-head .hint{font-size:11.5px;color:var(--wwg-graphite);opacity:.8}
   @media (max-width:620px){.sec-head .hint{display:none}}
+  /* gauge picker — matched to the range buttons, native <select> for a11y */
+  #stream-select{
+    font-family:var(--wwg-font-body);
+    font-size:12.5px;font-weight:500;
+    padding:5px 10px;border-radius:4px;cursor:pointer;
+    border:1px solid var(--wwg-gray-200);
+    background:#fff;color:var(--wwg-graphite);
+    max-width:min(320px,60vw);
+  }
+  #stream-select:hover{border-color:var(--wwg-horizon-blue);color:var(--wwg-horizon-blue)}
+  #stream-select:focus-visible{outline:2px solid var(--wwg-bright-blue);outline-offset:2px}
+  #stream-select[hidden]{display:none}
+  #stream-charts .stream-msg{
+    font-size:12.5px;color:var(--wwg-graphite);
+    border:1px dashed var(--wwg-gray-200);border-radius:6px;padding:14px;
+  }
 
   /* ---------- current conditions cards ---------- */
   .cards{
@@ -366,7 +382,9 @@
   </div>
   <div class="charts" id="charts"></div>
 
-  <div class="sec-head" id="stream-head" style="display:none"><h2>Stream Gauges</h2><div class="rule"></div>
+  <div class="sec-head" id="stream-head" style="display:none"><h2>Stream Gauges</h2>
+    <select id="stream-select" aria-label="Select a stream gauge"></select>
+    <div class="rule"></div>
     <span style="font-size:12px;color:var(--wwg-graphite)">USGS provisional data &middot; 7-day view</span>
   </div>
   <div class="charts" id="stream-charts"></div>
@@ -455,7 +473,7 @@ const ROLE_PATTERNS = {
 };
 
 const ROLE_LABELS = {
-  airTemp:"Air Temp", rh:"Relative Humidity", wsAvg:"Wind Speed",
+  airTemp:"Air Temperature", rh:"Relative Humidity", wsAvg:"Wind Speed",
   wsMax:"Wind Gust", windDir:"Wind Direction", solar:"Solar",
   rain:"Rain", battV:"Battery"
 };
@@ -586,6 +604,79 @@ function countBelow(role, hours, threshold){
     }
   }
   return count;
+}
+
+/* ---------------------------------------------------------------------------
+   Apparent temperature ("feels like").
+
+   The station reports temperature in whatever unit the server converted to
+   (°F here, but the front end stays generic), so everything is normalised to
+   °F, run through the NWS formulas, and converted back for display.
+
+   - Heat index: NWS Rothfusz regression, T >= 80 °F. The simple Steadman
+     average is tried first; if it comes out under 80 °F that IS the heat
+     index (the regression is only valid up top). Two NWS corrections apply:
+     dry air (RH < 13%, 80-112 °F) lowers it, muggy air (RH > 85%, 80-87 °F)
+     raises it.
+   - Wind chill: NWS 2001 formula, T <= 50 °F and wind > 3 mph.
+   - In between, the air temperature is what it feels like — kind is null and
+     the tile shows nothing rather than a redundant line.
+   --------------------------------------------------------------------------*/
+function unitsAreCelsius(u){
+  const s = String(u || "");
+  return /c/i.test(s) && !/f/i.test(s);
+}
+function toF(v, units){ return unitsAreCelsius(units) ? v * 9 / 5 + 32 : v; }
+function fromF(v, units){ return unitsAreCelsius(units) ? (v - 32) * 5 / 9 : v; }
+function toMph(v, units){
+  const s = String(units || "").toLowerCase().replace(/\s/g, "");
+  if (s === "m/s" || s === "ms" || s === "mps") return v * 2.236936;
+  if (s === "km/h" || s === "kph" || s === "kmh") return v * 0.6213712;
+  if (s === "kn" || s === "kt" || s === "kts" || s === "knots") return v * 1.150779;
+  return v;   // already mph (or unlabelled — assume the display unit)
+}
+
+/* -> {v: °F, kind: "heat" | "chill" | null}. v is NaN only if tF is. */
+function feelsLikeF(tF, rh, windMph){
+  if (!isFinite(tF)) return {v:NaN, kind:null};
+
+  if (tF >= 80 && isFinite(rh)){
+    const simple = 0.5 * (tF + 61 + (tF - 68) * 1.2 + rh * 0.094);
+    if ((simple + tF) / 2 < 80) return {v:simple, kind:"heat"};
+    let hi = -42.379 + 2.04901523 * tF + 10.14333127 * rh
+           - 0.22475541 * tF * rh - 0.00683783 * tF * tF - 0.05481717 * rh * rh
+           + 0.00122874 * tF * tF * rh + 0.00085282 * tF * rh * rh
+           - 0.00000199 * tF * tF * rh * rh;
+    if (rh < 13 && tF <= 112)
+      hi -= ((13 - rh) / 4) * Math.sqrt((17 - Math.abs(tF - 95)) / 17);
+    else if (rh > 85 && tF <= 87)
+      hi += ((rh - 85) / 10) * ((87 - tF) / 5);
+    return {v:hi, kind:"heat"};
+  }
+
+  if (tF <= 50 && isFinite(windMph) && windMph > 3){
+    const w = Math.pow(windMph, 0.16);
+    return {v: 35.74 + 0.6215 * tF - 35.75 * w + 0.4275 * tF * w, kind:"chill"};
+  }
+
+  return {v:tF, kind:null};
+}
+
+/* The line under the air-temperature reading. Empty string when the apparent
+   temperature is not meaningfully different from the measured one, so the
+   tile stays quiet on an ordinary day. */
+function feelsLikeText(tempVal, rhVal, windVal){
+  const tU = Store.roleUnits("airTemp");
+  const f = feelsLikeF(toF(tempVal, tU), rhVal,
+                       toMph(windVal, Store.roleUnits("wsAvg")));
+  if (!f.kind || !isFinite(f.v)) return "";
+  const shown = fromF(f.v, tU);
+  // near the 80 °F / 50 °F edges the formulas can land on or just past the
+  // measured value; a "feels like" that isn't hotter (heat) or colder (chill)
+  // than the thermometer tells the reader nothing, so say nothing
+  const diff = f.kind === "heat" ? shown - tempVal : tempVal - shown;
+  if (!(diff >= 1)) return "";
+  return "feels like " + fmt(shown, 0) + (tU ? " " + tU : "");
 }
 
 /* ============================================================================
@@ -1190,8 +1281,15 @@ const UI = {
     const today = st[0], yest = st[1];
 
     if (Store.roles.airTemp !== undefined){
-      this.setCard("airTemp", Store.roleVal(last,"airTemp"), Store.roleUnits("airTemp"), "", 1);
+      const t = Store.roleVal(last, "airTemp");
+      // heat index above 80 °F, wind chill at or below 50 °F, otherwise blank
+      const feels = feelsLikeText(t, Store.roleVal(last, "rh"), Store.roleVal(last, "wsAvg"));
+      this.setCard("airTemp", t, Store.roleUnits("airTemp"), feels, 1);
       this.setStats("airTemp", pairMinMax(today.airTemp, 1), pairMinMax(yest.airTemp, 1));
+      const tc = el("card-airTemp");
+      if (tc) tc.title = feels
+        ? (toF(t, Store.roleUnits("airTemp")) >= 80 ? "NWS heat index" : "NWS wind chill")
+        : "";
     }
     if (Store.roles.rh !== undefined){
       this.setCard("rh", Store.roleVal(last,"rh"), Store.roleUnits("rh") || "%", "", 0);
@@ -1608,15 +1706,75 @@ async function loadPrecipSummary(){
 setInterval(loadPrecipSummary, 300000);
   
 
+/* Selected gauge id, or null for "whatever the endpoint gives us first".
+   Mirrored in the query string (?gauge=USGS-…) so a view is shareable, and
+   kept across the 15-minute refresh. */
+let streamGauge = new URLSearchParams(location.search).get("gauge") || null;
+
+function setGaugeParam(id){
+  const u = new URL(location.href);            // keeps #param=… intact
+  if (id) u.searchParams.set("gauge", id); else u.searchParams.delete("gauge");
+  history.replaceState(history.state, "", u.toString());
+}
+
+/* Rebuild the picker only when the catalog actually changes, so reopening the
+   dropdown during a refresh doesn't snap shut. */
+function buildGaugeSelect(catalog){
+  const sel = el("stream-select");
+  if (!sel) return;
+  sel.hidden = catalog.length < 2;            // one gauge needs no chooser
+  const sig = catalog.map(g => g.id + "|" + g.label).join("\u0000");
+  if (sel.dataset.sig !== sig){
+    sel.dataset.sig = sig;
+    sel.innerHTML = "";
+    for (const g of catalog){
+      const o = document.createElement("option");
+      o.value = g.id;
+      o.textContent = g.label || g.id;
+      sel.appendChild(o);
+    }
+    sel.onchange = () => {
+      streamGauge = sel.value;
+      setGaugeParam(streamGauge);
+      loadStreamGauges();
+    };
+  }
+  if (streamGauge) sel.value = streamGauge;
+  if (!sel.value && catalog.length) sel.value = catalog[0].id;
+}
+
 async function loadStreamGauges(){
   try{
-    const r = await DataSource.fetchJson(CONFIG.apiBase + "/stream?station=" +
-      encodeURIComponent(CONFIG.station));
+    let u = CONFIG.apiBase + "/stream?station=" + encodeURIComponent(CONFIG.station);
+    if (streamGauge) u += "&gauge=" + encodeURIComponent(streamGauge);
+    let r;
+    try{
+      r = await DataSource.fetchJson(u);
+    }catch(e){
+      // a stale/unknown ?gauge= shouldn't blank the section — fall back once
+      if (!streamGauge) throw e;
+      streamGauge = null; setGaugeParam(null);
+      r = await DataSource.fetchJson(CONFIG.apiBase + "/stream?station=" +
+        encodeURIComponent(CONFIG.station));
+    }
     const host = el("stream-charts");
     host.innerHTML = "";
-    if (!r.gauges || !r.gauges.length){ el("stream-head").style.display = "none"; return; }
+    const gauges = r.gauges || [];
+    const catalog = (r.catalog && r.catalog.length)
+      ? r.catalog
+      : gauges.map(g => ({id:g.id, label:g.label}));
+    if (!catalog.length){ el("stream-head").style.display = "none"; return; }
     el("stream-head").style.display = "flex";
-    for (const g of r.gauges){
+    buildGaugeSelect(catalog);
+    if (!streamGauge && gauges.length) streamGauge = gauges[0].id;
+    if (!gauges.length){
+      const m = document.createElement("div");
+      m.className = "stream-msg";
+      m.textContent = "No recent data from this gauge.";
+      host.appendChild(m);
+      return;
+    }
+    for (const g of gauges){
       // merge stage+flow onto a shared time axis
       const byT = new Map();
       g.stage.t.forEach((t,i) => byT.set(t, {t:new Date(t*1000), stage:g.stage.v[i], flow:NaN}));
