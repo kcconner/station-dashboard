@@ -25,8 +25,15 @@
  *   METADATA_TTL_SEC  optional — default 3600.
  */
 
-const MAX_RECORDS_PER_QUERY = 2500; // safety cap (14 d of 10-min = 2016)
+// Safety cap on records per query, sized from the station's interval so the
+// longest window data.js allows (14 d) always fits. A fixed 2500 was fine for
+// 10-min data but truncated 1-min stations to ~41.7 h, so 3D and 7D matched.
+const MAX_QUERY_DAYS = 14;
 const UPSTREAM_TIMEOUT_MS = 25000;
+
+function maxRecords(station) {
+  return Math.ceil((MAX_QUERY_DAYS * 1440) / station.interval) + 5;
+}
 
 // per-isolate metadata cache (isolates recycle; that's fine, it refetches)
 let fieldMeta = { expires: 0, data: {} };
@@ -87,13 +94,13 @@ export function buildQuery(station, { last, hours, sinceRec }) {
     interval: station.interval,
     stations: [station.code],
     utc: false,
-    recordsPerStation: MAX_RECORDS_PER_QUERY,
+    recordsPerStation: maxRecords(station),
   };
   if (station.fields && station.fields.length)
     body.fields = station.fields.map((f) => (typeof f === "string" ? f : f.key));
 
   if (last != null) {
-    body.recordsPerStation = Math.min(last, MAX_RECORDS_PER_QUERY);
+    body.recordsPerStation = Math.min(last, maxRecords(station));
   } else if (sinceRec != null) {
     // first instant strictly after the given synthetic record number
     body.earliestDate = isoUtc((sinceRec + 1) * intervalSec * 1000);
