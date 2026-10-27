@@ -483,6 +483,10 @@ const ROLE_LABELS = {
 const BATT_LOW_V = 11.5;
 const BATT_DIP_V = 12;
 
+/* Records per history request. Must stay under the proxy's 2500-record cap
+   (MAX_RECORDS_PER_QUERY in functions/api/_lib.js); ~40 h at 1-minute data. */
+const BACKFILL_CHUNK = 2400;
+
 const RANGES = [
   {label:"1H",  hours:1},
   {label:"6H",  hours:6},
@@ -702,11 +706,25 @@ const DataSource = {
   probe(){            // 1 record: fast first paint + field discovery
     return this.fetchJson(this.url("last=1"));
   },
-  backfill(nRecords){ // small n => quick "last N"; large n => full window
-    const qs = (nRecords && nRecords < 100)
-      ? "last=" + nRecords
-      : "hours=" + (CONFIG.historyDays * 24);
-    return this.fetchJson(this.url(qs));
+  backfill(nRecords){ // quick "last N" (server caps at 100)
+    return this.fetchJson(this.url("last=" + nRecords));
+  },
+  /* Full history window, fetched as parallel chunks of BACKFILL_CHUNK records:
+     one response for the whole window is too big for the Pages Function on a
+     1-minute station. Chunk edges are multiples of BACKFILL_CHUNK so the older
+     chunks keep stable URLs (edge-cacheable); the oldest may reach past the
+     window, and Store.merge's retention trims it. Resolves to one ascending
+     {head, data} like a single query would. */
+  async history(latestNo){
+    const C = BACKFILL_CHUNK;
+    const startNo = latestNo - Math.ceil(CONFIG.historyDays * 86400 / CONFIG.scanIntervalSec);
+    let hi = Math.floor(latestNo / C) * C;
+    const qs = ["since_rec=" + hi];            // newest chunk: open-ended, still growing
+    while (hi > startNo){ qs.push("since_rec=" + (hi - C) + "&until_rec=" + hi); hi -= C; }
+    const parts = await Promise.all(qs.map(q => this.fetchJson(this.url(q))));
+    const data = [];
+    for (let i = parts.length - 1; i >= 0; i--) data.push(...(parts[i].data || []));
+    return {head: parts[0].head, data};
   },
   incremental(afterRecNo){
     return this.fetchJson(this.url("since_rec=" + afterRecNo));
@@ -1599,8 +1617,9 @@ async function initialLoad(){
     syncDrillFromHash();   // honour a #param= deep link now that fields exist
 
     // 2) backfill the history window
-    const n = Math.ceil(CONFIG.historyDays * 86400 / CONFIG.scanIntervalSec) + 2;
-    const back = await DataSource.backfill(n);
+    const latestNo = Store.lastNo !== null ? Store.lastNo
+      : Math.floor(Date.now() / 1000 / CONFIG.scanIntervalSec);
+    const back = await DataSource.history(latestNo);
     Store.rows = []; Store.lastNo = null;      // replace probe row cleanly
     Store.setHead(back.head);
     Store.merge(back.data);

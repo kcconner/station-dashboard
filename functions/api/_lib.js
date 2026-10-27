@@ -81,7 +81,7 @@ function qcRedact(env) {
   return ["unreliable", "questionable", "u", "q"].includes(v) ? v : null;
 }
 
-export function buildQuery(station, { last, hours, sinceRec }) {
+export function buildQuery(station, { last, hours, sinceRec, untilRec }) {
   const intervalSec = station.interval * 60;
   const body = {
     interval: station.interval,
@@ -97,6 +97,9 @@ export function buildQuery(station, { last, hours, sinceRec }) {
   } else if (sinceRec != null) {
     // first instant strictly after the given synthetic record number
     body.earliestDate = isoUtc((sinceRec + 1) * intervalSec * 1000);
+    // optional upper bound (inclusive) — lets the front end page through
+    // long windows in chunks that stay under MAX_RECORDS_PER_QUERY
+    if (untilRec != null) body.latestDate = isoUtc(untilRec * intervalSec * 1000);
   } else if (hours != null) {
     body.earliestDate = isoUtc(Date.now() - hours * 3600e3);
   }

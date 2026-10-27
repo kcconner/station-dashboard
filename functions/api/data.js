@@ -1,4 +1,5 @@
-/* GET /api/data?station=<id>&last=N | &hours=H | &since_rec=R
+/* GET /api/data?station=<id>&last=N | &hours=H | &since_rec=R[&until_rec=U]
+ * since_rec/until_rec select records with R < no <= U (until_rec optional).
  * Response mirrors the CR1000X dataquery JSON contract (see _lib.js).
  * Edge-cached via caches.default keyed on the full request URL. */
 import { getStation } from "./_config.js";
@@ -20,10 +21,11 @@ export async function onRequestGet(context) {
 
   let last = intParam(url, "last");
   let sinceRec = intParam(url, "since_rec");
+  let untilRec = intParam(url, "until_rec");
   let hours = url.searchParams.has("hours")
     ? parseFloat(url.searchParams.get("hours"))
     : null;
-  if ([last, sinceRec, hours].some((v) => typeof v === "number" && Number.isNaN(v)))
+  if ([last, sinceRec, untilRec, hours].some((v) => typeof v === "number" && Number.isNaN(v)))
     return errorResponse("bad parameter", 400);
   if (last === null && sinceRec === null && hours === null) last = 1;
 
@@ -31,6 +33,8 @@ export async function onRequestGet(context) {
   if (last !== null) last = Math.max(1, Math.min(last, 100));
   if (hours !== null) hours = Math.max(0.1, Math.min(hours, 24 * 14));
   if (sinceRec !== null && sinceRec < 0) return errorResponse("bad parameter", 400);
+  if (untilRec !== null && (sinceRec === null || untilRec <= sinceRec))
+    return errorResponse("bad parameter", 400);
 
   // edge cache (per-colo); normalized key = the request URL
   const cache = typeof caches !== "undefined" ? caches.default : null;
@@ -42,7 +46,7 @@ export async function onRequestGet(context) {
 
   let resp;
   try {
-    const payload = await queryData(station, { last, hours, sinceRec }, env);
+    const payload = await queryData(station, { last, hours, sinceRec, untilRec }, env);
     resp = jsonResponse(payload, 200, ttl);
   } catch (e) {
     console.error(`WWG API query failed for station=${station.id}: ${e.message}`);

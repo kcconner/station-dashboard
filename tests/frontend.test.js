@@ -184,13 +184,23 @@ function makeData(n){
   return {head:{environment:{stationName:"Broadway Weather", scan_sec:60}, fields}, data};
 }
 const N_RECORDS = 400;
+/* history arrives in since_rec/until_rec chunks, so the stub serves slices of
+   one fixed record set and logs every /data query for the chunking checks */
+const dataQueries = [];
 global.fetch = async (u) => {
   let body;
   if (u.includes("/stations"))    body = [{id:"WWG-1006", name:"Broadway Weather"}];
   else if (u.includes("/precip")) body = {today:0.1, yesterday:0, week:0.3, month:1, ytd:9, units:"in", asOf:"2026-08-28T10:00"};
   else if (u.includes("/stream")) body = {gauges:[]};
   else if (u.includes("last=1"))  body = makeData(1);
-  else                            body = makeData(N_RECORDS);
+  else {
+    const q = new RealURL(u, "http://x").searchParams;
+    dataQueries.push(q);
+    body = makeData(N_RECORDS);
+    const lo = q.has("since_rec") ? +q.get("since_rec") : -Infinity;
+    const hi = q.has("until_rec") ? +q.get("until_rec") : Infinity;
+    body.data = body.data.filter(r => r.no > lo && r.no <= hi);
+  }
   return {ok:true, status:200, statusText:"OK", json: async () => body};
 };
 
@@ -207,6 +217,25 @@ const {CONFIG, Store, UI, Drill, PARAM_VIEWS, RANGES, syncDrillFromHash,
 
   console.log("\nbuffer / roles");
   ok("records buffered", Store.rows.length === N_RECORDS, Store.rows.length);
+  ok("buffer ascending across chunk joins",
+     Store.rows.every((r, i) => i === 0 || r.no > Store.rows[i-1].no));
+
+  console.log("\nhistory chunking");
+  const bounded = dataQueries.filter(q => q.has("until_rec"));
+  const weekRecs = CONFIG.historyDays * 86400 / CONFIG.scanIntervalSec;
+  ok("no single whole-window query", dataQueries.every(q => !q.has("hours")));
+  ok("window split into chunks", bounded.length >= Math.ceil(weekRecs / 2400),
+     "chunks=" + bounded.length);
+  ok("every chunk under the proxy cap",
+     bounded.every(q => +q.get("until_rec") - +q.get("since_rec") <= 2400));
+  ok("chunks are aligned (stable cache URLs)",
+     bounded.every(q => +q.get("until_rec") % 2400 === 0));
+  const spans = dataQueries.map(q => [+q.get("since_rec"), q.has("until_rec") ? +q.get("until_rec") : Infinity])
+                           .sort((a, b) => a[0] - b[0]);
+  ok("chunks tile the window with no gaps or overlaps",
+     spans.every((s, i) => i === 0 || s[0] === spans[i-1][1]));
+  ok("chunks reach back a full window",
+     spans[0][0] <= Store.lastNo - weekRecs, spans[0][0] - (Store.lastNo - weekRecs));
   ok("roles detected", ["airTemp","rh","wsAvg","wsMax","windDir","solar","rain","battV"]
       .every(r => Store.roles[r] !== undefined), JSON.stringify(Store.roles));
 
